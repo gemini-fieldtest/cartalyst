@@ -1,0 +1,8 @@
+{
+  "name": "Cartalyst",
+  "description": "An advanced AI-powered racing coach and driving performance optimizer. Features real-time telemetry simulation, lap analysis, and generative AI coaching advice.",
+  "requestFramePermissions": [
+    "geolocation",
+    "microphone"
+  ]
+}
