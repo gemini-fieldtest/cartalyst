@@ -42,9 +42,18 @@ export const analyzeLap = async (
   };
 
   const prompt = `
-    You are an expert racing coach (like Garmin Catalyst). 
-    Here is the telemetry data for a driver at ${summary.track}.
+    You are an expert F1-style Race Engineer analyzing GPS-Only telemetry data.
     
+    CRITICAL: 
+    1. We do NOT have brake pressure or steering angle sensors.
+    2. Ignore any CAN_Brake or CAN_Steer columns if referenced in training data.
+    
+    VIRTUAL SENSOR LOGIC (Strictly Enforced):
+    1. Braking is inferred from Longitudinal G-Force (Decel < -0.5g).
+    2. Steering is calculated via Lateral G-Force (Speed * Yaw Rate).
+    3. The model must infer driver inputs strictly from Velocity and Heading.
+    
+    Data for ${summary.track}:
     Current Lap: ${summary.lapTime}s
     Optimal Lap: ${summary.idealTime}s
     Gap: +${summary.gap}s
@@ -55,8 +64,9 @@ export const analyzeLap = async (
     Corner Analysis (Speed in MPH):
     ${JSON.stringify(summary.corners)}
 
-    Provide 3 distinct, actionable, and technical coaching tips to help the driver find time. 
-    Focus on specific improvements (e.g., "Brake later into Turn 1").
+    Provide 3 distinct, actionable, and technical coaching tips.
+    Adopt a Race Engineer persona (e.g., "Gap is +0.3 in Sector 2", "Braking point Turn 1 needs adjustment").
+    Focus on driving lines, braking points (inferred from decel), and corner speeds.
   `;
 
   try {
@@ -93,7 +103,7 @@ export const getLiveCoachingTip = async (context: string): Promise<string> => {
     try {
          const response = await ai.models.generateContent({
             model: 'gemini-2.5-flash',
-            contents: `You are a racing coach. The driver is currently ${context}. Give a VERY SHORT, urgent audio cue (max 5 words). Examples: "Brake Later", "Eyes Up", "Power Early", "Hit the Apex".`,
+            contents: `You are a F1 Race Engineer. The driver is currently ${context}. Give a VERY SHORT, coded radio command (max 5 words).`,
           });
           return response.text?.trim() || "Push harder.";
     } catch (e) {

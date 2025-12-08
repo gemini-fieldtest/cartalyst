@@ -2,12 +2,11 @@ import React from 'react';
 import { ViewState } from '../types';
 import { 
   LayoutDashboard, 
-  Activity, 
-  LineChart, 
   Settings,
   Zap,
   Wifi,
-  Battery
+  Battery,
+  Satellite
 } from 'lucide-react';
 
 interface NavbarProps {
@@ -45,7 +44,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentView, onNavigate }) => {
         </div>
         <div>
             <h1 className="text-sm font-black tracking-widest text-white uppercase leading-none">CARTALYST</h1>
-            <p className="text-[10px] text-sky-500 font-bold tracking-[0.2em] leading-none">AI COACH</p>
+            <p className="text-[10px] text-sky-500 font-bold tracking-[0.2em] leading-none">GPS TELEMETRY</p>
         </div>
       </div>
 
@@ -59,9 +58,13 @@ export const Navbar: React.FC<NavbarProps> = ({ currentView, onNavigate }) => {
       {/* Right Status Area */}
       <div className="flex items-center justify-end gap-6 w-48">
         <div className="flex items-center gap-4 text-xs font-mono text-slate-500">
+            <div className="flex items-center gap-1.5" title="GPS Status">
+                <Satellite size={14} className="text-emerald-500" />
+                <span>ACTIVE</span>
+            </div>
             <div className="flex items-center gap-1.5" title="Signal Strength">
                 <Wifi size={14} className="text-emerald-500" />
-                <span>LTE</span>
+                <span>5G</span>
             </div>
             <div className="flex items-center gap-1.5" title="Battery Level">
                 <Battery size={14} className="text-emerald-500" />

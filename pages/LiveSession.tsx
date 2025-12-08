@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { TrackVisualizer } from '../components/TrackVisualizer';
-import { Play, Square, Mic, MicOff, Radio } from 'lucide-react';
+import { Play, Square, Mic, MicOff, Radio, LocateFixed, MapPin, AlertTriangle } from 'lucide-react';
 import { MOCK_TRACK, MOCK_SESSION } from '../constants';
 import { GoogleGenAI, LiveServerMessage, Modality } from "@google/genai";
-import { Lap } from '../types';
+import { Lap, TelemetryPoint, Track } from '../types';
 
 // --- Audio Helpers ---
 
@@ -93,10 +93,41 @@ function playGForceCue(ctx: AudioContext, type: 'corner' | 'brake') {
 
 // --- Components ---
 
+const VoiceClue: React.FC = () => {
+    const clues = [
+        "Radio: 'Gap to Target'",
+        "Radio: 'Check Tires'",
+        "Radio: 'Sector Status'",
+        "Radio: 'Box Box'"
+    ];
+    const [index, setIndex] = useState(0);
+
+    useEffect(() => {
+        const i = setInterval(() => {
+            setIndex(prev => (prev + 1) % clues.length);
+        }, 8000);
+        return () => clearInterval(i);
+    }, []);
+
+    return (
+        <div className="animate-fade-in-up text-center">
+            <p className="text-[10px] text-sky-400 font-bold uppercase tracking-widest opacity-80 mb-1">Radio Comm</p>
+            <p className="text-sm font-mono text-white bg-slate-900/50 px-3 py-1 rounded-full border border-sky-500/20 shadow-lg backdrop-blur">
+                {clues[index]}
+            </p>
+        </div>
+    );
+};
+
 const GForceGauge: React.FC<{ lat: number; long: number }> = ({ lat, long }) => {
   const MAX_G = 2.0;
   const clampedLat = Math.max(-MAX_G, Math.min(MAX_G, lat));
   const clampedLong = Math.max(-MAX_G, Math.min(MAX_G, long));
+
+  // Determine virtual sensor states
+  // Braking = significant negative longitudinal G
+  const isBraking = long < -0.5;
+  const isAccel = long > 0.1;
 
   const xPos = 50 + (clampedLat / MAX_G) * 50;
   const yPos = 50 - (clampedLong / MAX_G) * 50;
@@ -104,7 +135,7 @@ const GForceGauge: React.FC<{ lat: number; long: number }> = ({ lat, long }) => 
   return (
     <div className="w-20 h-20 md:w-32 md:h-32 relative group cursor-default pointer-events-none select-none transition-all">
       {/* Background/Dial */}
-      <div className="absolute inset-0 bg-slate-900/80 backdrop-blur-md rounded-full border border-slate-700 shadow-xl overflow-hidden">
+      <div className={`absolute inset-0 backdrop-blur-md rounded-full border shadow-xl overflow-hidden transition-colors duration-200 ${isBraking ? 'bg-rose-900/40 border-rose-500/50' : 'bg-slate-900/80 border-slate-700'}`}>
         {/* Grid Circles */}
         <div className="absolute inset-0 m-[15%] border border-slate-700/50 rounded-full" />
         <div className="absolute inset-0 m-[48%] bg-slate-800/50 rounded-full" />
@@ -113,13 +144,15 @@ const GForceGauge: React.FC<{ lat: number; long: number }> = ({ lat, long }) => 
         <div className="absolute top-0 bottom-0 left-1/2 w-px bg-slate-700/50" />
         <div className="absolute left-0 right-0 top-1/2 h-px bg-slate-700/50" />
         
-        {/* Labels (Hidden on very small screens to reduce clutter) */}
+        {/* Labels */}
         <div className="hidden md:block absolute top-2 left-1/2 -translate-x-1/2 text-[8px] font-bold text-slate-500 tracking-wider">ACCEL</div>
-        <div className="hidden md:block absolute bottom-2 left-1/2 -translate-x-1/2 text-[8px] font-bold text-slate-500 tracking-wider">BRAKE</div>
+        <div className={`hidden md:block absolute bottom-2 left-1/2 -translate-x-1/2 text-[8px] font-bold tracking-wider ${isBraking ? 'text-rose-500 animate-pulse' : 'text-slate-500'}`}>BRAKE</div>
 
         {/* The Puck */}
         <div 
-            className="absolute w-3 h-3 md:w-4 md:h-4 bg-sky-500 rounded-full border-2 border-white shadow-[0_0_15px_rgba(14,165,233,1)] transition-transform duration-100 ease-linear will-change-transform z-10"
+            className={`absolute w-3 h-3 md:w-4 md:h-4 rounded-full border-2 border-white shadow-[0_0_15px] transition-transform duration-100 ease-linear will-change-transform z-10 ${
+                isBraking ? 'bg-rose-500 shadow-rose-500' : 'bg-sky-500 shadow-sky-500'
+            }`}
             style={{ 
                 left: `${xPos}%`, 
                 top: `${yPos}%`,
@@ -132,20 +165,31 @@ const GForceGauge: React.FC<{ lat: number; long: number }> = ({ lat, long }) => 
 };
 
 export const LiveSession: React.FC = () => {
+  const [useRealGps, setUseRealGps] = useState(false);
   const [isActive, setIsActive] = useState(false);
-  const [isVoiceConnected, setIsVoiceConnected] = useState(false);
-  const [voiceStatus, setVoiceStatus] = useState<'disconnected' | 'connecting' | 'connected' | 'error'>('disconnected');
+  const [gpsError, setGpsError] = useState<string | null>(null);
+  
+  // Telemetry State
   const [speed, setSpeed] = useState(0);
   const [lapTime, setLapTime] = useState(0);
-  const [sessionTime, setSessionTime] = useState(0);
   const [progress, setProgress] = useState(0); 
   const [ghostProgress, setGhostProgress] = useState(0);
   const [currentLap, setCurrentLap] = useState(1);
   const [delta, setDelta] = useState(0);
-  
   const [gLat, setGLat] = useState(0);
   const [gLong, setGLong] = useState(0);
   
+  // Real GPS Data Buffer
+  const [gpsPoints, setGpsPoints] = useState<{x:number, y:number}[]>([]);
+  const lastGpsUpdateRef = useRef<number>(0);
+  const lastGpsSpeedRef = useRef<number>(0);
+  const lastGpsHeadingRef = useRef<number>(0);
+
+  // Audio & AI Refs
+  const isVoiceConnectedRef = useRef(false);
+  const [voiceStatus, setVoiceStatus] = useState<'disconnected' | 'connecting' | 'connected' | 'error'>('disconnected');
+  
+  // Animation Refs
   const requestRef = useRef<number>(0);
   const startTimeRef = useRef<number>(0);
   const speedRef = useRef<number>(0);
@@ -153,8 +197,11 @@ export const LiveSession: React.FC = () => {
   const gLatRef = useRef<number>(0);
   const gLongRef = useRef<number>(0);
   const currentLapRef = useRef<number>(1);
-  const sessionOffsetRef = useRef<number>(0);
-
+  const currentSectorRef = useRef<number>(1);
+  const currentDistRef = useRef<number>(0);
+  const lapTimeRef = useRef<number>(0);
+  
+  // Audio Context Refs
   const inputContextRef = useRef<AudioContext | null>(null);
   const outputContextRef = useRef<AudioContext | null>(null);
   const outputNodeRef = useRef<GainNode | null>(null);
@@ -163,9 +210,27 @@ export const LiveSession: React.FC = () => {
   const nextStartTimeRef = useRef<number>(0);
   const sessionPromiseRef = useRef<Promise<any> | null>(null);
   const sourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
-
   const lastAudioCueTime = useRef<number>(0);
+  const watchIdRef = useRef<number | null>(null);
 
+  // --- Track Logic ---
+  // In Simulation: Use Mock Track.
+  // In Real GPS: Use the breadcrumbs collected so far.
+  const activeTrack: Track = useMemo(() => {
+    if (!useRealGps) return MOCK_TRACK;
+    
+    // Convert GPS points to a simplified track structure on the fly
+    if (gpsPoints.length < 2) return MOCK_TRACK; // Fallback until we have data
+
+    return {
+        ...MOCK_TRACK,
+        mapPoints: gpsPoints,
+        length: gpsPoints.length * 10 // Approximate scale
+    };
+  }, [useRealGps, gpsPoints]);
+
+
+  // --- Simulation Mode ---
   const userLap = MOCK_SESSION.laps.find(l => l.id === 'lap_1') || MOCK_SESSION.laps[0];
   const idealLap = MOCK_SESSION.laps.find(l => l.id === 'lap_ideal') || MOCK_SESSION.laps[0];
 
@@ -190,67 +255,72 @@ export const LiveSession: React.FC = () => {
     };
   };
 
-  const getIdealTimeAtDistance = (d: number) => {
-    const data = idealLap.telemetry;
-    let idx = data.findIndex(p => p.distance > d);
-    if (idx === -1) return data[data.length - 1].time;
-    if (idx === 0) return data[0].time;
-    
-    const p1 = data[idx - 1];
-    const p2 = data[idx];
-    const range = p2.distance - p1.distance;
-    const ratio = range > 0 ? (d - p1.distance) / range : 0;
-    
-    return p1.time + (p2.time - p1.time) * ratio;
+  const getSector = (dist: number) => {
+      return MOCK_TRACK.sectors.find(s => dist >= s.startDist && dist < s.endDist)?.id || 1;
   };
 
+  // --- Main Animation Loop ---
   const animate = (timestamp: number) => {
-    if (!startTimeRef.current) startTimeRef.current = timestamp;
-    const elapsedTotal = (timestamp - startTimeRef.current) + sessionOffsetRef.current;
-    
-    const elapsedSeconds = elapsedTotal / 1000;
-    setSessionTime(elapsedSeconds);
+    // If using Real GPS, we don't use the simulation loop for physics.
+    // We only use this loop to update the Timer and UI interpolation if needed.
+    if (useRealGps) {
+        if (isActive && startTimeRef.current === 0) startTimeRef.current = timestamp;
+        
+        const elapsedTotal = isActive ? (timestamp - startTimeRef.current) : 0;
+        const currentLapTimeSec = elapsedTotal / 1000;
+        setLapTime(currentLapTimeSec);
+        lapTimeRef.current = currentLapTimeSec;
 
+        // In Real Mode, physics update happens in the Geolocation Callback.
+        // We just ensure the Refs are up to date for the UI
+        requestRef.current = requestAnimationFrame(animate);
+        return; 
+    }
+
+    // --- Simulation Mode ---
+    if (!startTimeRef.current) startTimeRef.current = timestamp;
+    const elapsedTotal = (timestamp - startTimeRef.current);
+    
     const lapDurationMs = userLap.time * 1000;
     const currentLapTimeMs = elapsedTotal % lapDurationMs;
     const currentLapTimeSec = currentLapTimeMs / 1000;
 
     const userState = getTelemetryAtTime(userLap, currentLapTimeSec);
     const userProgress = userState.distance / MOCK_TRACK.length;
-
+    
+    // Ghost (Ideal Lap) logic - NOW PHYSICS BASED
+    // We get the actual position of the Ideal Lap at this timestamp
     const ghostState = getTelemetryAtTime(idealLap, currentLapTimeSec);
-    const ghostProg = ghostState.distance / MOCK_TRACK.length;
-
-    const idealTimeAtMyDist = getIdealTimeAtDistance(userState.distance);
-    const calcDelta = currentLapTimeSec - idealTimeAtMyDist;
+    const ghostProgress = ghostState.distance / MOCK_TRACK.length;
+    
+    // Calc Delta
+    // Compare where I am vs where I should be at this time
+    // If I'm at 100m, and at this time the Ideal Lap was at 120m, I am behind.
+    // Delta ~ Distance Diff / Speed
+    const distDiff = userState.distance - ghostState.distance; 
+    const currentSpeedMs = Math.max(10, userState.speed) * 0.44704; // mph to m/s
+    const calcDelta = distDiff / currentSpeedMs;
 
     setProgress(Math.min(1, Math.max(0, userProgress)));
-    setGhostProgress(Math.min(1, Math.max(0, ghostProg)));
+    setGhostProgress(Math.min(1, Math.max(0, ghostProgress)));
+    
+    // Update State
     setSpeed(Math.round(userState.speed));
     setGLat(userState.gLat);
     setGLong(userState.gLong);
     setLapTime(currentLapTimeSec);
     setDelta(calcDelta);
     
+    // Update Refs for Audio/AI
     speedRef.current = Math.round(userState.speed);
-    deltaRef.current = calcDelta;
     gLatRef.current = userState.gLat;
     gLongRef.current = userState.gLong;
-    
-    // Audio Cues Logic
-    if (isVoiceConnected && outputContextRef.current) {
-      const now = performance.now();
-      // Cooldown of 3 seconds to prevent spam
-      if (now - lastAudioCueTime.current > 3000) {
-        if (Math.abs(userState.gLat) > 1.35) {
-           playGForceCue(outputContextRef.current, 'corner');
-           lastAudioCueTime.current = now;
-        } else if (userState.gLong < -0.8) {
-           playGForceCue(outputContextRef.current, 'brake');
-           lastAudioCueTime.current = now;
-        }
-      }
-    }
+    deltaRef.current = calcDelta;
+    currentSectorRef.current = getSector(userState.distance);
+    currentDistRef.current = Math.round(userState.distance);
+    lapTimeRef.current = currentLapTimeSec;
+
+    handleAudioCues(userState.gLat, userState.gLong);
 
     const newLap = Math.floor(elapsedTotal / lapDurationMs) + 1;
     if (newLap !== currentLapRef.current) {
@@ -261,22 +331,146 @@ export const LiveSession: React.FC = () => {
     requestRef.current = requestAnimationFrame(animate);
   };
 
+  const handleAudioCues = (lat: number, long: number) => {
+      if (isVoiceConnectedRef.current && outputContextRef.current) {
+        const now = performance.now();
+        if (now - lastAudioCueTime.current > 3000) {
+          if (Math.abs(lat) > 1.35) {
+             playGForceCue(outputContextRef.current, 'corner');
+             lastAudioCueTime.current = now;
+          } else if (long < -0.8) {
+             playGForceCue(outputContextRef.current, 'brake');
+             lastAudioCueTime.current = now;
+          }
+        }
+      }
+  };
+
+  // --- GPS Physics Engine ---
+  useEffect(() => {
+    if (useRealGps && isActive) {
+        setGpsError(null); // Clear any previous errors when starting
+        if (!navigator.geolocation) {
+            const msg = "Geolocation not supported";
+            console.error(msg);
+            setGpsError(msg);
+            return;
+        }
+
+        watchIdRef.current = navigator.geolocation.watchPosition(
+            (pos) => {
+                // Clear error if we get a successful reading
+                setGpsError(null);
+
+                const now = pos.timestamp;
+                const { latitude, longitude, speed: rawSpeedMs, heading: rawHeading } = pos.coords;
+                
+                // 1. Calculate Time Delta (dt)
+                const dt = (now - lastGpsUpdateRef.current) / 1000; // seconds
+                if (dt <= 0) return; // Ignore duplicate updates
+
+                // 2. Speed (m/s -> km/h -> mph)
+                // Browser returns m/s. If null, calculate from distance (not implemented here for brevity, assuming standard GPS)
+                const speedMs = rawSpeedMs || 0; 
+                const speedMph = speedMs * 2.23694;
+
+                // 3. Longitudinal G (Acceleration/Braking)
+                // a = dv / dt
+                const dv = speedMs - lastGpsSpeedRef.current;
+                const accelMs2 = dv / dt;
+                const longG = accelMs2 / 9.81;
+
+                // 4. Lateral G (Cornering)
+                // a = v * omega (Yaw Rate)
+                // Yaw Rate = dHeading / dt
+                let dHeading = (rawHeading || 0) - lastGpsHeadingRef.current;
+                // Handle 359->1 degree wrap
+                if (dHeading > 180) dHeading -= 360;
+                if (dHeading < -180) dHeading += 360;
+                
+                const yawRateRadS = (dHeading * (Math.PI / 180)) / dt;
+                const latAccelMs2 = speedMs * yawRateRadS;
+                const latG = latAccelMs2 / 9.81;
+
+                // 5. Update State & Refs
+                setSpeed(Math.round(speedMph));
+                
+                // EMA Filter (Smoothing) to reduce GPS noise
+                const alpha = 0.3; 
+                const smoothLongG = (longG * alpha) + (gLongRef.current * (1 - alpha));
+                const smoothLatG = (latG * alpha) + (gLatRef.current * (1 - alpha));
+
+                setGLat(smoothLatG);
+                setGLong(smoothLongG);
+                
+                speedRef.current = Math.round(speedMph);
+                gLatRef.current = smoothLatG;
+                gLongRef.current = smoothLongG;
+                
+                // Map visualization update (Normalize coords to canvas space roughly)
+                // In a real app we'd project Lat/Lng to X/Y. 
+                // Here we just map a tiny local grid for effect
+                setGpsPoints(prev => {
+                   const newP = { x: (longitude + 180) * 50, y: (latitude + 90) * 50 }; // Just raw scaling for demo
+                   // Keep only last 200 points to avoid memory leak in visualizer
+                   const next = [...prev, newP];
+                   if (next.length > 200) return next.slice(next.length - 200);
+                   return next;
+                });
+                
+                // Update history refs
+                lastGpsUpdateRef.current = now;
+                lastGpsSpeedRef.current = speedMs;
+                lastGpsHeadingRef.current = rawHeading || 0;
+
+                handleAudioCues(smoothLatG, smoothLongG);
+            },
+            (err) => {
+                let msg = err.message;
+                if (err.code === 1) msg = "Location Permission Denied";
+                if (err.code === 2) msg = "GPS Signal Unavailable";
+                if (err.code === 3) msg = "GPS Signal Timeout";
+                
+                console.error(`GPS Error (${err.code}):`, err.message);
+                setGpsError(msg);
+            },
+            { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 }
+        );
+    } else {
+        // Cleanup if not active or switched to SIM
+        if (watchIdRef.current !== null) {
+            navigator.geolocation.clearWatch(watchIdRef.current);
+            watchIdRef.current = null;
+        }
+        if (!isActive) {
+            setGpsError(null);
+        }
+    }
+
+    return () => {
+        if (watchIdRef.current !== null) {
+            navigator.geolocation.clearWatch(watchIdRef.current);
+        }
+    };
+  }, [useRealGps, isActive]);
+
   useEffect(() => {
     if (isActive) {
-      startTimeRef.current = 0;
+      startTimeRef.current = 0; // Reset timer on start
       requestRef.current = requestAnimationFrame(animate);
     } else {
       cancelAnimationFrame(requestRef.current);
-      sessionOffsetRef.current = sessionTime * 1000;
+      // Reset Telemetry display
       setGLat(0);
       setGLong(0);
       setSpeed(0);
     }
     return () => cancelAnimationFrame(requestRef.current);
-  }, [isActive]);
+  }, [isActive, useRealGps]);
 
+  // --- Voice Connection Logic (Same as before) ---
   const connectToVoiceCoach = async () => {
-    if (isVoiceConnected || voiceStatus === 'connecting') return;
+    if (isVoiceConnectedRef.current || voiceStatus === 'connecting') return;
 
     try {
       setVoiceStatus('connecting');
@@ -319,7 +513,7 @@ export const LiveSession: React.FC = () => {
           },
           systemInstruction: { 
             parts: [{ 
-              text: "You are Apex, an elite racing coach sitting in the passenger seat. You will receive periodic [TELEMETRY UPDATE] text messages with Speed (MPH), Delta (time gap), Lat G (cornering load), and Long G (braking/accel). Use this data to provide IMMEDIATE, PROACTIVE cues. High Lat G (>1.0) means hard cornering. Negative Long G (<-0.5) is heavy braking. Positive Delta means losing time -> yell 'Push!' or 'Focus!'. High speed + low G -> 'Brake Late!'. Keep responses under 5 words. Urgent and intense. Do not read the telemetry text out loud, just react to it." 
+              text: "You are an elite F1 Race Engineer (like Peter Bonnington or GP). Your driver is on track. I will stream you live GPS telemetry including: Lap Time, Current Speed, Time Delta to optimal lap, and G-Forces. \n\nPERSONA GUIDELINES:\n- Be calm, precise, technical, and slightly cold.\n- Use F1 radio jargon: 'Copy', 'Box box', 'Mode Push', 'Purple Sector'.\n- Focus primarily on DELTA, LAP TIME, and SPEED maintenance.\n- If Delta is negative (e.g., -0.2), say 'Two tenths up', 'Purple sector', or 'Good pace'.\n- If Delta is positive (e.g., +0.5), say 'Gap is +0.5', 'Time to find in Sector 2', or 'Check lines'.\n- Only speak when there is a significant change or advice needed. Keep messages concise (under 8 words)." 
             }] 
           }
         },
@@ -327,7 +521,7 @@ export const LiveSession: React.FC = () => {
           onopen: () => {
             console.log("Gemini Live Session Opened");
             setVoiceStatus('connected');
-            setIsVoiceConnected(true);
+            isVoiceConnectedRef.current = true;
             
             source.connect(processor);
             processor.connect(inputContext.destination);
@@ -339,6 +533,14 @@ export const LiveSession: React.FC = () => {
                 session.sendRealtimeInput({ media: pcmBlob });
               });
             };
+
+            // IMMEDIATE RADIO CHECK: Force the model to speak as soon as connection opens
+            sessionPromise.then(session => {
+                const s = session as any;
+                if (typeof s.send === 'function') {
+                     s.send({ parts: [{ text: "The driver has just connected the radio. Give a short, professional F1 radio check immediately. e.g. 'Radio check. Loud and clear.'" }] });
+                }
+            });
           },
           onmessage: async (msg: LiveServerMessage) => {
             const serverContent = msg.serverContent;
@@ -367,12 +569,12 @@ export const LiveSession: React.FC = () => {
           onclose: () => {
             console.log("Gemini Live Session Closed");
             setVoiceStatus('disconnected');
-            setIsVoiceConnected(false);
+            isVoiceConnectedRef.current = false;
           },
           onerror: (err) => {
             console.error("Gemini Live Error:", err);
             setVoiceStatus('error');
-            setIsVoiceConnected(false);
+            isVoiceConnectedRef.current = false;
             disconnectVoiceCoach();
           }
         }
@@ -383,7 +585,7 @@ export const LiveSession: React.FC = () => {
     } catch (error) {
       console.error("Failed to connect voice:", error);
       setVoiceStatus('error');
-      setIsVoiceConnected(false);
+      isVoiceConnectedRef.current = false;
     }
   };
 
@@ -410,12 +612,12 @@ export const LiveSession: React.FC = () => {
          sessionPromiseRef.current.then(session => session.close()).catch(console.error);
          sessionPromiseRef.current = null;
      }
-     setIsVoiceConnected(false);
+     isVoiceConnectedRef.current = false;
      setVoiceStatus('disconnected');
   };
 
   const toggleVoice = () => {
-    if (isVoiceConnected) {
+    if (isVoiceConnectedRef.current) {
         disconnectVoiceCoach();
     } else {
         connectToVoiceCoach();
@@ -431,13 +633,15 @@ export const LiveSession: React.FC = () => {
   useEffect(() => {
     let interval: ReturnType<typeof setInterval>;
 
-    if (isVoiceConnected && isActive) {
+    if (isVoiceConnectedRef.current && isActive) {
         interval = setInterval(() => {
             if (sessionPromiseRef.current) {
-                const telemetryMsg = `[TELEMETRY UPDATE] Speed: ${speedRef.current}mph. Delta: ${deltaRef.current > 0 ? '+' : ''}${deltaRef.current.toFixed(2)}s. G-Lat: ${gLatRef.current.toFixed(2)}. G-Long: ${gLongRef.current.toFixed(2)}.`;
+                // Send rich telemetry
+                const telemetryMsg = `[TELEMETRY] LapTime: ${lapTimeRef.current.toFixed(2)}s. Sector: ${currentSectorRef.current}. Dist: ${currentDistRef.current}m. Speed: ${speedRef.current}mph. Delta: ${deltaRef.current > 0 ? '+' : ''}${deltaRef.current.toFixed(2)}s. G-Lat: ${gLatRef.current.toFixed(2)}. G-Long: ${gLongRef.current.toFixed(2)}.`;
                 sessionPromiseRef.current.then(session => {
-                    if (typeof session.send === 'function') {
-                        session.send({ parts: [{ text: telemetryMsg }] });
+                    const s = session as any;
+                    if (typeof s.send === 'function') {
+                        s.send({ parts: [{ text: telemetryMsg }] });
                     }
                 }).catch(() => {});
             }
@@ -445,7 +649,7 @@ export const LiveSession: React.FC = () => {
     }
 
     return () => clearInterval(interval);
-  }, [isVoiceConnected, isActive]);
+  }, [voiceStatus, isActive]); // Depend on voiceStatus to trigger re-effect
 
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -457,82 +661,101 @@ export const LiveSession: React.FC = () => {
   return (
     <div className="h-full w-full relative bg-[#0B0F19] overflow-hidden">
       
-      {/* --- HUD: Top Bar (Pinned Top) --- */}
-      <div className="absolute top-0 left-0 right-0 z-20 grid grid-cols-4 md:flex md:h-20 border-b border-white/5 bg-[#0B0F19]/90 backdrop-blur shadow-2xl">
-        <div className={`col-span-2 md:flex-1 p-2 md:p-0 flex flex-col items-center justify-center border-r border-b md:border-b-0 border-white/5 transition-colors duration-300 ${delta < 0 ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}`}>
-           <span className="text-[10px] md:text-xs uppercase font-bold tracking-widest opacity-70">Delta</span>
-           <span className="text-2xl md:text-5xl font-mono font-bold tracking-tighter">
+      {/* --- SIMPLIFIED RACE HUD --- */}
+      <div className="absolute top-0 left-0 right-0 z-20 flex h-24 md:h-32 border-b border-white/10 shadow-2xl">
+        
+        {/* BIG DELTA (Primary Driver Metric) */}
+        <div className={`flex-1 flex flex-col items-center justify-center transition-colors duration-200 ${delta > 0 ? 'bg-rose-900/80 text-rose-500' : 'bg-emerald-900/80 text-emerald-400'}`}>
+           <span className="text-xs md:text-sm font-black uppercase tracking-[0.2em] opacity-80">Time Delta</span>
+           <span className="text-6xl md:text-8xl font-black font-mono tracking-tighter leading-none">
              {delta > 0 ? '+' : ''}{Math.abs(delta).toFixed(2)}
            </span>
         </div>
         
-        <div className="col-span-2 md:flex-1 p-2 md:p-0 flex flex-col items-center justify-center border-r-0 md:border-r border-b md:border-b-0 border-white/5">
-           <span className="text-[10px] md:text-xs text-slate-500 uppercase font-bold tracking-widest">Lap {currentLap}</span>
-           <span className="text-2xl md:text-5xl font-mono font-bold text-white tracking-tighter">
-             {formatTime(lapTime)}
-           </span>
-        </div>
-
-        <div className="col-span-2 md:flex-1 p-2 md:p-0 flex flex-col items-center justify-center border-r border-white/5">
-           <span className="text-[10px] md:text-xs text-slate-500 uppercase font-bold tracking-widest">Speed</span>
-           <div className="flex items-baseline gap-1">
-             <span className="text-2xl md:text-5xl font-mono font-bold text-white tracking-tighter">{speed}</span>
-             <span className="text-xs md:text-sm text-slate-600 font-bold">MPH</span>
-           </div>
-        </div>
-
-        <div className="col-span-2 md:flex-1 p-2 md:p-0 flex flex-col items-center justify-center">
-            <span className="text-[10px] md:text-xs text-slate-500 uppercase font-bold tracking-widest">Session</span>
-            <span className="text-xl md:text-4xl font-mono text-slate-400 tracking-tight">
-                {formatTime(sessionTime)}
-            </span>
+        {/* SECONDARY INFO (Speed & Lap) */}
+        <div className="flex-1 bg-[#0B0F19]/95 backdrop-blur flex flex-col">
+            {/* Speed */}
+            <div className="flex-1 flex items-center justify-center border-b border-white/10 relative">
+                <div className="flex items-baseline gap-2">
+                    <span className="text-5xl md:text-7xl font-bold font-mono text-white tracking-tighter">{speed}</span>
+                    <span className="text-sm md:text-xl font-bold text-slate-500">MPH</span>
+                </div>
+                {/* Source Indicator */}
+                <div className="absolute top-2 right-2 flex items-center gap-1.5 px-2 py-1 rounded bg-white/5 border border-white/10">
+                    <MapPin size={10} className={useRealGps ? "text-emerald-500" : "text-amber-500"} />
+                    <span className="text-[10px] font-mono text-slate-400">{useRealGps ? 'GPS LIVE' : 'SIMULATION'}</span>
+                </div>
+            </div>
+            {/* Lap Time */}
+            <div className="h-10 md:h-12 flex items-center justify-between px-6 bg-slate-900/50">
+                <span className="text-xs font-bold text-slate-500 uppercase tracking-widest">Lap {currentLap}</span>
+                <span className="text-lg md:text-xl font-mono font-bold text-white">{formatTime(lapTime)}</span>
+            </div>
         </div>
       </div>
 
-      {/* --- World: Map (Full Screen Background) --- */}
-      <div className="absolute inset-0 z-0 bg-[#0B0F19] pt-[80px] pb-[180px] md:pt-20 md:pb-32 flex items-center justify-center">
-        <div className="w-full h-full max-w-6xl p-4">
+      {/* --- World: Map --- */}
+      <div className="absolute inset-0 z-0 bg-[#0B0F19] pt-[96px] md:pt-[128px] pb-[100px] md:pb-[100px] flex items-center justify-center">
+        <div className="w-full h-full max-w-7xl p-4">
             <TrackVisualizer 
-                track={MOCK_TRACK} 
-                activeSegment={progress} 
-                ghostSegment={ghostProgress}
+                track={activeTrack} 
+                activeSegment={useRealGps ? 0.99 : progress} // In real GPS, always show end of path
+                ghostSegment={useRealGps ? null : ghostProgress}
                 className="w-full h-full"
             />
         </div>
 
-        {/* G-Force Gauge (Overlay on Map) */}
-        <div className="absolute bottom-72 right-4 md:bottom-56 md:right-8 pointer-events-none z-10">
+        {/* GPS Error Toast */}
+        {useRealGps && gpsError && (
+             <div className="absolute top-28 left-0 right-0 flex justify-center z-50 pointer-events-none">
+                <div className="bg-rose-500 text-white px-4 py-2 rounded-full shadow-lg flex items-center gap-2 animate-pulse">
+                    <AlertTriangle size={16} />
+                    <span className="text-xs font-bold uppercase tracking-wide">{gpsError}</span>
+                </div>
+             </div>
+        )}
+
+        {/* G-Force Gauge (GPS Inferred) */}
+        <div className="absolute bottom-32 right-4 md:bottom-28 md:right-8 pointer-events-none z-10">
             <GForceGauge lat={gLat} long={gLong} />
         </div>
-        
-        {/* Voice Coach Status (Overlay on Map) */}
-        {isVoiceConnected && (
-            <div className="absolute top-32 left-4 md:top-24 md:left-8 flex items-center gap-2 px-3 py-1.5 bg-sky-500/10 border border-sky-500/20 rounded-full backdrop-blur z-10">
-                <div className="flex space-x-0.5 h-3 items-end">
-                    <span className="w-0.5 bg-sky-400 animate-[bounce_1s_infinite] h-2"></span>
-                    <span className="w-0.5 bg-sky-400 animate-[bounce_1.2s_infinite] h-3"></span>
-                    <span className="w-0.5 bg-sky-400 animate-[bounce_0.8s_infinite] h-1.5"></span>
-                </div>
-                <span className="text-[10px] font-bold text-sky-400 uppercase tracking-wider">AI Coach Active</span>
+
+        {/* Voice Clues */}
+        {isVoiceConnectedRef.current && (
+            <div className="absolute bottom-32 left-4 md:bottom-28 md:left-8 z-10">
+                <VoiceClue />
             </div>
         )}
       </div>
 
-      {/* --- HUD: Footer Controls (Pinned Bottom) --- */}
-      <div className="fixed bottom-0 left-0 right-0 z-[100] w-full p-4 pb-12 md:p-6 bg-[#0B0F19]/95 backdrop-blur-xl border-t border-white/10 flex gap-3 md:justify-center items-center shadow-[0_-10px_40px_rgba(0,0,0,0.5)] border-white/10">
+      {/* --- HUD: Fixed Footer --- */}
+      <div className="fixed bottom-0 left-0 right-0 z-[100] w-full p-4 pb-12 md:p-6 bg-[#0B0F19]/95 backdrop-blur-xl border-t border-white/10 flex gap-3 items-center shadow-[0_-10px_40px_rgba(0,0,0,0.5)]">
         
+        {/* GPS Source Toggle */}
+        <button
+          onClick={() => setUseRealGps(!useRealGps)}
+          className={`shrink-0 h-14 w-14 rounded-xl flex items-center justify-center transition-all border shadow-lg active:scale-95 ${
+            useRealGps 
+              ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400 shadow-emerald-900/20' 
+              : 'bg-slate-800 border-white/10 text-slate-500 hover:text-slate-300'
+          }`}
+          title={useRealGps ? "Switch to Simulation" : "Switch to Real GPS"}
+        >
+           <LocateFixed size={24} className={useRealGps ? "animate-pulse" : ""} />
+        </button>
+
         {/* Voice Toggle */}
         <button
           onClick={toggleVoice}
-          className={`shrink-0 h-14 w-14 md:h-12 md:w-14 rounded-xl flex items-center justify-center transition-all border shadow-lg active:scale-95 ${
-            isVoiceConnected 
+          className={`shrink-0 h-14 w-14 rounded-xl flex items-center justify-center transition-all border shadow-lg active:scale-95 ${
+            isVoiceConnectedRef.current
               ? 'bg-sky-500/20 border-sky-500 text-sky-400 shadow-sky-900/20' 
               : 'bg-slate-800 border-white/10 text-slate-300 hover:bg-slate-700'
           }`}
         >
           {voiceStatus === 'connecting' ? (
              <Radio className="animate-pulse" size={24} />
-          ) : isVoiceConnected ? (
+          ) : isVoiceConnectedRef.current ? (
              <Mic size={24} />
           ) : (
              <MicOff size={24} />
@@ -542,7 +765,7 @@ export const LiveSession: React.FC = () => {
         {/* Start/Stop Button */}
         <button
           onClick={() => setIsActive(!isActive)}
-          className={`flex-1 md:flex-none md:w-72 h-14 md:h-12 rounded-xl font-black uppercase tracking-widest text-sm md:text-base flex items-center justify-center gap-3 transition-all shadow-[0_0_20px_rgba(0,0,0,0.3)] whitespace-nowrap transform active:scale-95 ${
+          className={`flex-1 h-14 rounded-xl font-black uppercase tracking-widest text-base flex items-center justify-center gap-3 transition-all shadow-[0_0_20px_rgba(0,0,0,0.3)] active:scale-95 ${
             isActive
               ? 'bg-rose-600 hover:bg-rose-500 text-white border border-rose-400 shadow-rose-900/30'
               : 'bg-[#00ffa3] hover:bg-[#00dd8c] text-black border border-[#4dffc0] shadow-[0_0_20px_rgba(0,255,163,0.3)]'
@@ -550,15 +773,15 @@ export const LiveSession: React.FC = () => {
         >
           {isActive ? (
             <>
-              <Square size={20} fill="currentColor" /> <span>STOP SESSION</span>
+              <Square size={20} fill="currentColor" /> <span>STOP</span>
             </>
           ) : (
             <>
-              <Play size={24} fill="currentColor" /> <span>START SESSION</span>
+              <Play size={24} fill="currentColor" /> <span>START {useRealGps ? 'GPS' : 'SESSION'}</span>
             </>
           )}
         </button>
       </div>
     </div>
   );
-};
+}

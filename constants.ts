@@ -1,6 +1,7 @@
 import { Session, Track, TelemetryPoint, Lap } from './types';
 
 // Helper to generate a sine-wave based track telemetry for demo purposes
+// UPDATED: Now strictly implements "Virtual Sensor" logic for GPS-only architecture
 const generateTelemetry = (length: number, intensity: number): TelemetryPoint[] => {
   const points: TelemetryPoint[] = [];
   const step = 10; // every 10 meters
@@ -19,16 +20,23 @@ const generateTelemetry = (length: number, intensity: number): TelemetryPoint[] 
     const gLat = Math.sin(d / 100) * 1.5 * intensity;
     const gLong = (cornerFactor < 0 ? -0.8 : 0.4) * intensity; // Braking when corner factor negative
     
+    // VIRTUAL SENSOR LOGIC (GPS-ONLY):
+    // Braking is inferred ONLY if Long G < -0.5g (Significant Deceleration)
+    const isBraking = gLong < -0.5;
+    // Throttle is inferred from positive longitudinal acceleration
+    const isThrottle = gLong > 0.1;
+
     points.push({
       distance: d,
       speed: Math.max(20, speedMph), // Min speed 20 mph
-      lat: 0, // Placeholder
-      lng: 0, // Placeholder
+      lat: 0, // Placeholder for GPS lat
+      lng: 0, // Placeholder for GPS long
       gLat,
       gLong,
-      throttle: gLong > 0 ? gLong * 100 : 0,
-      brake: gLong < 0 ? Math.abs(gLong) * 100 : 0,
-      time: accumulatedTime // Store accumulated time
+      // Derived strictly from G-Force (GPS derivative)
+      throttle: isThrottle ? Math.min(100, gLong * 200) : 0, 
+      brake: isBraking ? Math.min(100, Math.abs(gLong) * 120) : 0,
+      time: accumulatedTime 
     });
 
     // Calculate time for this segment (distance / speed)

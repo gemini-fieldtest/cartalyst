@@ -5,8 +5,8 @@ export interface TelemetryPoint {
   lng: number;
   gLat: number; // Lateral G
   gLong: number; // Longitudinal G
-  throttle: number; // 0-100
-  brake: number; // 0-100
+  throttle: number; // 0-100 (Inferred from GPS Accel > 0)
+  brake: number; // 0-100 (Inferred from GPS Decel < -0.5g)
   time: number; // Time in seconds from start of lap
 }
 
