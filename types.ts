@@ -10,6 +10,19 @@ export interface TelemetryPoint {
   time: number; // Time in seconds from start of lap
 }
 
+export interface GpsSSEPoint {
+  time: string;   // ISO timestamp
+  lat: number;
+  lon: number;
+  alt: number;
+  speed: number;  // m/s
+  climb: number;
+  track: number;  // Heading
+  mode: number;
+}
+
+export type SSEConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
+
 export interface Sector {
   id: number;
   name: string;
@@ -43,6 +56,8 @@ export interface Track {
   sectors: Sector[];
   mapPoints: { x: number; y: number }[]; // Simplified polygon for rendering
   recordLap: number;
+  center?: { lat: number; lng: number };
+  zoom?: number;
 }
 
 export enum ViewState {

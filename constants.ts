@@ -7,19 +7,41 @@ const generateTelemetry = (length: number, intensity: number): TelemetryPoint[] 
   const step = 10; // every 10 meters
   let accumulatedTime = 0;
 
+  // Calculate track shape (approximate oval/circuit for demo)
+  // Map 'd' to a position on a loop.
+  // Thunderhill Auto-Cross / East loop approx.
+  const cx = -122.3251;
+  const cy = 39.5375;
+  const radiusX = 0.005; // approx 500m in deg
+  const radiusY = 0.003;
+
   for (let d = 0; d <= length; d += step) {
     // Simulate speed based on track position (slowing for "corners")
+    const progress = d / length;
+    const angle = progress * Math.PI * 2;
+
+    // Simple track shape: Figure 8-ish or Oval to match map points
+    // Let's do a squashed oval that matches the "MapPoints" visually roughly
+    const xOffset = Math.cos(angle) * 400; // meters
+    const yOffset = Math.sin(angle) * 300; // meters
+
+    // Convert meters to Lat/Lon (rough approx)
+    // 1 deg Lat = 111000m
+    // 1 deg Lon = 111000m * cos(lat)
+    const dLat = yOffset / 111000;
+    const dLon = xOffset / (111000 * Math.cos(cy * Math.PI / 180));
+
     const cornerFactor = Math.sin(d / 200) * Math.cos(d / 150);
     // Base calculation in KM/H for physics simulation feel
     const speedKmh = 100 + (cornerFactor * 80) * intensity + (Math.random() * 5);
-    
+
     // Convert to MPH for display and storage
     const speedMph = speedKmh * 0.621371;
-    
+
     // Simulate G-forces
     const gLat = Math.sin(d / 100) * 1.5 * intensity;
     const gLong = (cornerFactor < 0 ? -0.8 : 0.4) * intensity; // Braking when corner factor negative
-    
+
     // VIRTUAL SENSOR LOGIC (GPS-ONLY):
     // Braking is inferred ONLY if Long G < -0.5g (Significant Deceleration)
     const isBraking = gLong < -0.5;
@@ -29,14 +51,14 @@ const generateTelemetry = (length: number, intensity: number): TelemetryPoint[] 
     points.push({
       distance: d,
       speed: Math.max(20, speedMph), // Min speed 20 mph
-      lat: 0, // Placeholder for GPS lat
-      lng: 0, // Placeholder for GPS long
+      lat: cy + dLat,
+      lng: cx + dLon,
       gLat,
       gLong,
       // Derived strictly from G-Force (GPS derivative)
-      throttle: isThrottle ? Math.min(100, gLong * 200) : 0, 
+      throttle: isThrottle ? Math.min(100, gLong * 200) : 0,
       brake: isBraking ? Math.min(100, Math.abs(gLong) * 120) : 0,
-      time: accumulatedTime 
+      time: accumulatedTime
     });
 
     // Calculate time for this segment (distance / speed)
@@ -50,19 +72,21 @@ const generateTelemetry = (length: number, intensity: number): TelemetryPoint[] 
 };
 
 export const MOCK_TRACK: Track = {
-  name: 'Silverstone International',
-  length: 2900,
+  name: 'Thunderhill Raceway Park',
+  length: 4800, // Approx 3 miles
+  zoom: 15,
+  center: { lat: 39.5375, lng: -122.3251 },
   sectors: [
-    { id: 1, name: 'Sector 1', startDist: 0, endDist: 900 },
-    { id: 2, name: 'Sector 2', startDist: 900, endDist: 1900 },
-    { id: 3, name: 'Sector 3', startDist: 1900, endDist: 2900 },
+    { id: 1, name: 'Sector 1', startDist: 0, endDist: 1500 },
+    { id: 2, name: 'Sector 2', startDist: 1500, endDist: 3000 },
+    { id: 3, name: 'Sector 3', startDist: 3000, endDist: 4800 },
   ],
   mapPoints: [
-    { x: 50, y: 350 }, { x: 200, y: 350 }, { x: 300, y: 200 }, 
+    { x: 50, y: 350 }, { x: 200, y: 350 }, { x: 300, y: 200 },
     { x: 400, y: 150 }, { x: 550, y: 150 }, { x: 600, y: 250 },
     { x: 500, y: 400 }, { x: 300, y: 450 }, { x: 100, y: 400 }
   ],
-  recordLap: 68.5
+  recordLap: 108.5
 };
 
 const idealTelemetry = generateTelemetry(MOCK_TRACK.length, 1.1);
@@ -81,7 +105,7 @@ export const MOCK_SESSION: Session = {
     {
       id: 'lap_1',
       lapNumber: 1,
-      time: amateurTelemetry[amateurTelemetry.length-1].time,
+      time: amateurTelemetry[amateurTelemetry.length - 1].time,
       valid: true,
       telemetry: amateurTelemetry, // Cold tires
       date: '2023-10-27T10:00:00Z',
@@ -90,7 +114,7 @@ export const MOCK_SESSION: Session = {
     {
       id: 'lap_2',
       lapNumber: 2,
-      time: midTelemetry[midTelemetry.length-1].time,
+      time: midTelemetry[midTelemetry.length - 1].time,
       valid: true,
       telemetry: midTelemetry,
       date: '2023-10-27T10:01:14Z',
@@ -99,7 +123,7 @@ export const MOCK_SESSION: Session = {
     {
       id: 'lap_3',
       lapNumber: 3,
-      time: fastTelemetry[fastTelemetry.length-1].time, // Personal Best
+      time: fastTelemetry[fastTelemetry.length - 1].time, // Personal Best
       valid: true,
       telemetry: fastTelemetry,
       date: '2023-10-27T10:02:26Z',
@@ -108,7 +132,7 @@ export const MOCK_SESSION: Session = {
     {
       id: 'lap_ideal', // Hidden ideal lap for comparison
       lapNumber: 99,
-      time: idealTelemetry[idealTelemetry.length-1].time,
+      time: idealTelemetry[idealTelemetry.length - 1].time,
       valid: true,
       telemetry: idealTelemetry,
       date: '2023-10-27T10:00:00Z',

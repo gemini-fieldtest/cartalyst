@@ -10,10 +10,11 @@
   },
   "dependencies": {
     "@google/genai": "^1.31.0",
+    "@vis.gl/react-google-maps": "^1.7.1",
     "lucide-react": "^0.555.0",
+    "react": "^19.2.1",
     "react-dom": "^19.2.1",
-    "recharts": "^3.5.1",
-    "react": "^19.2.1"
+    "recharts": "^3.5.1"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
