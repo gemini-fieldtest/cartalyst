@@ -9,9 +9,9 @@ const generateTelemetry = (length: number, intensity: number): TelemetryPoint[] 
 
   // Calculate track shape (approximate oval/circuit for demo)
   // Map 'd' to a position on a loop.
-  // Thunderhill Auto-Cross / East loop approx.
-  const cx = -122.3251;
-  const cy = 39.5375;
+  // Sonoma Raceway Approx Center
+  const cx = -122.4540;
+  const cy = 38.1615;
   const radiusX = 0.005; // approx 500m in deg
   const radiusY = 0.003;
 
@@ -71,20 +71,33 @@ const generateTelemetry = (length: number, intensity: number): TelemetryPoint[] 
   return points;
 };
 
+// Sonoma (Demo Track) Approximation from CSV
 export const MOCK_TRACK: Track = {
-  name: 'Thunderhill Raceway Park',
-  length: 4800, // Approx 3 miles
+  name: "Sonoma Raceway",
+  length: 4000, // Approximate length for Sonoma
   zoom: 15,
-  center: { lat: 39.5375, lng: -122.3251 },
+  center: { lat: 38.1615, lng: -122.4540 },
   sectors: [
-    { id: 1, name: 'Sector 1', startDist: 0, endDist: 1500 },
-    { id: 2, name: 'Sector 2', startDist: 1500, endDist: 3000 },
-    { id: 3, name: 'Sector 3', startDist: 3000, endDist: 4800 },
+    { id: 1, name: 'Sector 1', startDist: 0, endDist: 1300 },
+    { id: 2, name: 'Sector 2', startDist: 1300, endDist: 2700 },
+    { id: 3, name: 'Sector 3', startDist: 2700, endDist: 4000 },
   ],
+  // Projected X/Y points (approximate loop centered at 350, 250)
   mapPoints: [
-    { x: 50, y: 350 }, { x: 200, y: 350 }, { x: 300, y: 200 },
-    { x: 400, y: 150 }, { x: 550, y: 150 }, { x: 600, y: 250 },
-    { x: 500, y: 400 }, { x: 300, y: 450 }, { x: 100, y: 400 }
+    { x: 366, y: 350 },
+    { x: 382, y: 330 },
+    { x: 398, y: 300 },
+    { x: 400, y: 250 },
+    { x: 390, y: 200 },
+    { x: 370, y: 150 },
+    { x: 350, y: 120 },
+    { x: 330, y: 150 },
+    { x: 310, y: 200 },
+    { x: 300, y: 250 },
+    { x: 310, y: 300 },
+    { x: 330, y: 330 },
+    { x: 350, y: 350 },
+    { x: 366, y: 350 }
   ],
   recordLap: 108.5
 };
