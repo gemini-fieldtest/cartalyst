@@ -46,29 +46,44 @@ export const getHotAction = async (data: TelemetryData, activeCoach: CoachPerson
         }
 
         // Dynamic System Prompt based on Coach
-        let nanoSystemPrompt = `You are an on-real time copilot for a race car. Analyze telemetry and provide INSTANT, single-word commands.`;
+        let nanoSystemPrompt = `You are a real-time racing copilot. Output ONE action word based on telemetry.
+
+CORNER PHASES (detect from inputs):
+1. BRAKING ZONE: brakePos>20, longG<-0.5, speed dropping
+2. TURN-IN: brakePos reducing, latG building (>0.3)
+3. MID-CORNER: latG peak (>0.8), low throttle, minimal brake
+4. EXIT: latG reducing, throttle increasing
+
+DECISION MATRIX:
+| Condition | Action |
+|-----------|--------|
+| brakePos>50 AND longG<-0.8 | THRESHOLD |
+| brakePos>10 AND latG>0.4 | TRAIL_BRAKE |
+| latG>1.0 AND throttle<20 | COMMIT |
+| latG>0.6 AND latG reducing AND throttle<50 | THROTTLE |
+| throttle>80 AND latG<0.3 | PUSH |
+| throttle<10 AND brakePos<10 AND speed>60 | COAST (bad!) |
+| longG>0.3 AND throttle>70 | ACCELERATE |
+| latG<0.2 AND speed steady | MAINTAIN |
+| Any unstable transition | SMOOTH |
+
+CRITICAL ERRORS TO CATCH:
+- COASTING between brake and throttle = "NO_COAST"
+- Throttle while still heavy braking = "WAIT"
+- Lifting mid-corner without cause = "COMMIT"
+- Late throttle application on exit = "THROTTLE"`;
 
         if (activeCoach === 'TONY') {
-            nanoSystemPrompt += ` TONE: Encouraging. KEY COMMANDS: PUSH, COMMIT, SCOOT. IGNORE minor errors.`;
+            nanoSystemPrompt += `\n\nPERSONA: Encouraging, feel-based. Prefer: COMMIT, PUSH, SEND_IT, NICE. Ignore minor lift.`;
         } else if (activeCoach === 'RACHEL') {
-            nanoSystemPrompt += ` TONE: Technical. KEY COMMANDS: SMOOTH, BALANCE, VISION. Focus on stability.`;
+            nanoSystemPrompt += `\n\nPERSONA: Physics teacher. Prefer: SMOOTH, BALANCE, ROTATE, UNWIND. Focus on weight transfer.`;
         } else if (activeCoach === 'AJ') {
-            nanoSystemPrompt += ` TONE: Direct. KEY COMMANDS: BRAKE, THROTTLE, TURN. Pure inputs.`;
+            nanoSystemPrompt += `\n\nPERSONA: Direct, actionable. Prefer: BRAKE, THROTTLE, TURN_IN, TRACK_OUT. Pure commands.`;
         } else if (activeCoach === 'GARMIN') {
-            nanoSystemPrompt += ` TONE: Robotic. KEY COMMANDS: OPTIMAL, APEX, TRACK_OUT. Focus on delta.`;
+            nanoSystemPrompt += `\n\nPERSONA: Data robot. Prefer: OPTIMAL, APEX, EARLY, LATE, GOOD. Minimal words.`;
         } else {
-            nanoSystemPrompt += ` TONE: Adaptive. Use standard commands: BRAKE, PUSH, TURN, COAST, STABILIZE.`;
+            nanoSystemPrompt += `\n\nPERSONA: Adaptive expert. Match command urgency to error severity.`;
         }
-
-        // Simplified Prompt - Schema handles output format
-        nanoSystemPrompt += `
-        Input Data: speedKmh, rpm, throttle, brakePos, latG, longG.
-        Decision Logic:
-        - High Brake (>10) -> BRAKE or TRAIL_BRAKE
-        - High Throttle (>80) -> PUSH
-        - High LatG (>0.8) -> TURN or BALANCE
-        - Low Inputs -> COAST or STABILIZE
-        `;
 
         // --- KEY FIX: Use responseConstraint SDK Schema ---
         const schema = {
@@ -76,7 +91,20 @@ export const getHotAction = async (data: TelemetryData, activeCoach: CoachPerson
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["STABILIZE", "TRAIL_BRAKE", "THRESHOLD", "PUSH", "MAINTAIN", "COAST", "TURN", "COMMIT", "SCOOT", "SMOOTH", "BALANCE", "VISION", "OPTIMAL", "APEX", "TRACK_OUT"]
+                    "enum": [
+                        // Braking phase
+                        "THRESHOLD", "TRAIL_BRAKE", "BRAKE", "WAIT",
+                        // Corner phase
+                        "TURN_IN", "COMMIT", "ROTATE", "APEX",
+                        // Exit phase
+                        "THROTTLE", "UNWIND", "TRACK_OUT", "PUSH", "ACCELERATE",
+                        // Corrections
+                        "SMOOTH", "BALANCE", "NO_COAST", "EARLY", "LATE",
+                        // Positive feedback
+                        "GOOD", "NICE", "OPTIMAL", "SEND_IT",
+                        // Neutral
+                        "MAINTAIN", "STABILIZE"
+                    ]
                 }
             }
         };
@@ -106,12 +134,22 @@ export const getHotAction = async (data: TelemetryData, activeCoach: CoachPerson
 
         const normalizedAction = action; // Action is already normalized by the schema enum
 
-        // Color Logic (Derived in code, not AI)
-        let color = "#a855f7"; // Purple (Stabilize)
-        if (["BRAKE", "THRESHOLD", "STOP", "TRAIL_BRAKE"].some(v => normalizedAction.includes(v))) color = "#ef4444"; // Red
-        if (["PUSH", "COMMIT", "SCOOT", "OPTIMAL"].some(v => normalizedAction.includes(v))) color = "#d97706"; // Orange
-        if (["TURN", "VISION", "APEX", "TRACK_OUT"].some(v => normalizedAction.includes(v))) color = "#3b82f6"; // Blue
-        if (["COAST", "SMOOTH", "BALANCE", "MAINTAIN"].some(v => normalizedAction.includes(v))) color = "#22c55e"; // Green
+        // Color Logic by action category
+        const colorMap: Record<string, string> = {
+            // Braking - Red (urgent, slow down)
+            THRESHOLD: "#ef4444", TRAIL_BRAKE: "#ef4444", BRAKE: "#ef4444", WAIT: "#ef4444",
+            // Corner - Blue (precision, focus)
+            TURN_IN: "#3b82f6", COMMIT: "#3b82f6", ROTATE: "#3b82f6", APEX: "#3b82f6",
+            // Exit/Acceleration - Orange (power, aggression)
+            THROTTLE: "#f97316", UNWIND: "#f97316", TRACK_OUT: "#f97316", PUSH: "#f97316", ACCELERATE: "#f97316", SEND_IT: "#f97316",
+            // Corrections - Yellow (warning, adjust)
+            SMOOTH: "#eab308", BALANCE: "#eab308", NO_COAST: "#eab308", EARLY: "#eab308", LATE: "#eab308",
+            // Positive - Green (good job)
+            GOOD: "#22c55e", NICE: "#22c55e", OPTIMAL: "#22c55e",
+            // Neutral - Purple
+            MAINTAIN: "#a855f7", STABILIZE: "#a855f7"
+        };
+        const color = colorMap[normalizedAction] || "#a855f7";
 
         // Audio Feedback
         if (normalizedAction !== "STABILIZE" && normalizedAction !== lastSpokenAction) {
