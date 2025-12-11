@@ -1,12 +1,11 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { GoogleMapsTrack } from '../components/GoogleMapsTrack';
-import { Play, Square, Mic, MicOff, Radio, LocateFixed, MapPin, AlertTriangle, Settings, Key } from 'lucide-react';
+import { TrackVisualizer } from '../components/TrackVisualizer';
+import { Play, Square, Mic, MicOff, Radio, LocateFixed, MapPin, AlertTriangle } from 'lucide-react';
 import { MOCK_TRACK, MOCK_SESSION } from '../constants';
 import { GoogleGenAI, LiveServerMessage, Modality } from "@google/genai";
 import { Lap, TelemetryPoint, Track, SSEConnectionStatus } from '../types';
 import { GpsSSEService } from '../services/gpsService';
-
-const GPS_SSE_URL = '/mock_gps.txt'; // Using local mock file
+import { getHotAction, getColdAdvice, type HotAction, type ColdAdvice, type CoachPersona } from '../services/coachingService';
 
 // --- Audio Helpers ---
 
@@ -33,7 +32,6 @@ function createBlob(data: Float32Array): { data: string; mimeType: string } {
   const l = data.length;
   const int16 = new Int16Array(l);
   for (let i = 0; i < l; i++) {
-    // PCM 16-bit conversion
     int16[i] = Math.max(-1, Math.min(1, data[i])) * 32768;
   }
   return {
@@ -72,129 +70,51 @@ function playGForceCue(ctx: AudioContext, type: 'corner' | 'brake') {
   const now = ctx.currentTime;
 
   if (type === 'corner') {
-    // Low frequency thud for cornering load
     osc.frequency.setValueAtTime(60, now);
     osc.frequency.exponentialRampToValueAtTime(10, now + 0.15);
-
     gain.gain.setValueAtTime(0.2, now);
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
-
     osc.start(now);
     osc.stop(now + 0.15);
   } else {
-    // Slightly higher/sharper thud for heavy braking
     osc.frequency.setValueAtTime(80, now);
     osc.frequency.exponentialRampToValueAtTime(20, now + 0.1);
-
     gain.gain.setValueAtTime(0.15, now);
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
-
     osc.start(now);
     osc.stop(now + 0.1);
   }
 }
 
-// --- Components ---
+type TelemetrySource = 'csv-replay' | 'vbox-stream';
 
-const VoiceClue: React.FC = () => {
-  const clues = [
-    "Radio: 'Gap to Target'",
-    "Radio: 'Check Tires'",
-    "Radio: 'Sector Status'",
-    "Radio: 'Box Box'"
-  ];
-  const [index, setIndex] = useState(0);
-
-  useEffect(() => {
-    const i = setInterval(() => {
-      setIndex(prev => (prev + 1) % clues.length);
-    }, 8000);
-    return () => clearInterval(i);
-  }, []);
-
-  return (
-    <div className="animate-fade-in-up text-center">
-      <p className="text-[10px] text-sky-400 font-bold uppercase tracking-widest opacity-80 mb-1">Radio Comm</p>
-      <p className="text-sm font-mono text-white bg-slate-900/50 px-3 py-1 rounded-full border border-sky-500/20 shadow-lg backdrop-blur">
-        {clues[index]}
-      </p>
-    </div>
-  );
-};
-
-const GForceGauge: React.FC<{ lat: number; long: number }> = ({ lat, long }) => {
-  const MAX_G = 2.0;
-  const clampedLat = Math.max(-MAX_G, Math.min(MAX_G, lat));
-  const clampedLong = Math.max(-MAX_G, Math.min(MAX_G, long));
-
-  // Determine virtual sensor states
-  // Braking = significant negative longitudinal G
-  const isBraking = long < -0.5;
-  const isAccel = long > 0.1;
-
-  const xPos = 50 + (clampedLat / MAX_G) * 50;
-  const yPos = 50 - (clampedLong / MAX_G) * 50;
-
-  return (
-    <div className="w-20 h-20 md:w-32 md:h-32 relative group cursor-default pointer-events-none select-none transition-all">
-      {/* Background/Dial */}
-      <div className={`absolute inset-0 backdrop-blur-md rounded-full border shadow-xl overflow-hidden transition-colors duration-200 ${isBraking ? 'bg-rose-900/40 border-rose-500/50' : 'bg-slate-900/80 border-slate-700'}`}>
-        {/* Grid Circles */}
-        <div className="absolute inset-0 m-[15%] border border-slate-700/50 rounded-full" />
-        <div className="absolute inset-0 m-[48%] bg-slate-800/50 rounded-full" />
-
-        {/* Axes */}
-        <div className="absolute top-0 bottom-0 left-1/2 w-px bg-slate-700/50" />
-        <div className="absolute left-0 right-0 top-1/2 h-px bg-slate-700/50" />
-
-        {/* Labels */}
-        <div className="hidden md:block absolute top-2 left-1/2 -translate-x-1/2 text-[8px] font-bold text-slate-500 tracking-wider">ACCEL</div>
-        <div className={`hidden md:block absolute bottom-2 left-1/2 -translate-x-1/2 text-[8px] font-bold tracking-wider ${isBraking ? 'text-rose-500 animate-pulse' : 'text-slate-500'}`}>BRAKE</div>
-
-        {/* The Puck */}
-        <div
-          className={`absolute w-3 h-3 md:w-4 md:h-4 rounded-full border-2 border-white shadow-[0_0_15px] transition-transform duration-100 ease-linear will-change-transform z-10 ${isBraking ? 'bg-rose-500 shadow-rose-500' : 'bg-sky-500 shadow-sky-500'
-            }`}
-          style={{
-            left: `${xPos}%`,
-            top: `${yPos}%`,
-            transform: 'translate(-50%, -50%)'
-          }}
-        />
-      </div>
-    </div>
-  );
-};
-
-export const LiveSession: React.FC = () => {
-  const [useRealGps, setUseRealGps] = useState(false);
+export default function LiveSession() {
   const [isActive, setIsActive] = useState(false);
-  const [gpsError, setGpsError] = useState<string | null>(null);
-  const [sseStatus, setSseStatus] = useState<SSEConnectionStatus>('disconnected');
-  const gpsServiceRef = useRef<GpsSSEService | null>(null);
+  const [telemetrySource, setTelemetrySource] = useState<TelemetrySource>('csv-replay');
+  const [streamConnected, setStreamConnected] = useState(false);
 
-  // Google Maps State
-  const [mapsKey, setMapsKey] = useState(() => localStorage.getItem('GOOGLE_MAPS_KEY') || '');
-  const [showKeyModal, setShowKeyModal] = useState(false);
-  const [currentPos, setCurrentPos] = useState<{ lat: number; lng: number } | null>(null);
+  const csvDataRef = useRef<any[]>([]);
+  const csvIndexRef = useRef(0);
 
-  // Telemetry State
-  const [speed, setSpeed] = useState(0);
-  const [lapTime, setLapTime] = useState(0);
-  const [progress, setProgress] = useState(0);
-  const [ghostProgress, setGhostProgress] = useState(0);
-  const [currentLap, setCurrentLap] = useState(1);
-  const [delta, setDelta] = useState(0);
-  const [gLat, setGLat] = useState(0);
-  const [gLong, setGLong] = useState(0);
+  const [currentData, setCurrentData] = useState({
+    speed: 0,
+    gear: 1,
+    rpm: 1000,
+    throttle: 0,
+    brake: 0,
+    lat: 38.2589, // Default fallback
+    lon: -122.4578,
+    heading: 0,
+    gLat: 0,
+    gLong: 0
+  });
 
-  // Real GPS Data Buffer
-  const [gpsPoints, setGpsPoints] = useState<{ x: number, y: number }[]>([]);
-  const lastGpsUpdateRef = useRef<number>(0);
-  const lastGpsSpeedRef = useRef<number>(0);
-
-  const lastGpsHeadingRef = useRef<number>(0);
-  const gpsOffsetRef = useRef<{ lat: number, lon: number } | null>(null);
+  // Coaching State
+  const [hotAction, setHotAction] = useState<HotAction>({ action: 'WAITING', color: '#666' });
+  const [coldAdvice, setColdAdvice] = useState<ColdAdvice>({ message: "Analyzing telemetry...", detail: "Waiting for sufficient data..." });
+  const [activeCoach, setActiveCoach] = useState<CoachPersona>('SUPER_AJ');
+  const lastColdAdviceTime = useRef(0);
+  const lastHotActionTime = useRef(0);
 
   // Audio & AI Refs
   const isVoiceConnectedRef = useRef(false);
@@ -208,8 +128,6 @@ export const LiveSession: React.FC = () => {
   const gLatRef = useRef<number>(0);
   const gLongRef = useRef<number>(0);
   const currentLapRef = useRef<number>(1);
-  const currentSectorRef = useRef<number>(1);
-  const currentDistRef = useRef<number>(0);
   const lapTimeRef = useRef<number>(0);
 
   // Audio Context Refs
@@ -222,128 +140,13 @@ export const LiveSession: React.FC = () => {
   const sessionPromiseRef = useRef<Promise<any> | null>(null);
   const sourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
   const lastAudioCueTime = useRef<number>(0);
-  const watchIdRef = useRef<number | null>(null);
+
+  // Visualizer Ref
+  const visualizerRef = useRef<any>(null);
 
   // --- Track Logic ---
-  // In Simulation: Use Mock Track.
-  // In Real GPS: Use the breadcrumbs collected so far.
-  const activeTrack: Track = useMemo(() => {
-    if (!useRealGps) return MOCK_TRACK;
-
-    // Convert GPS points to a simplified track structure on the fly
-    if (gpsPoints.length < 2) return MOCK_TRACK; // Fallback until we have data
-
-    return {
-      ...MOCK_TRACK,
-      mapPoints: gpsPoints,
-      length: gpsPoints.length * 10 // Approximate scale
-    };
-  }, [useRealGps, gpsPoints]);
-
-
-  // --- Simulation Mode ---
-  const userLap = MOCK_SESSION.laps.find(l => l.id === 'lap_1') || MOCK_SESSION.laps[0];
-  const idealLap = MOCK_SESSION.laps.find(l => l.id === 'lap_ideal') || MOCK_SESSION.laps[0];
-
-  const getTelemetryAtTime = (lap: Lap, t: number) => {
-    const data = lap.telemetry;
-    let idx = data.findIndex(p => p.time > t);
-
-    if (idx === -1) idx = data.length - 1;
-    if (idx === 0) return data[0];
-
-    const p1 = data[idx - 1];
-    const p2 = data[idx];
-    const range = p2.time - p1.time;
-    const ratio = range > 0 ? (t - p1.time) / range : 0;
-
-    return {
-      distance: p1.distance + (p2.distance - p1.distance) * ratio,
-      speed: p1.speed + (p2.speed - p1.speed) * ratio,
-      gLat: p1.gLat + (p2.gLat - p1.gLat) * ratio,
-      gLong: p1.gLong + (p2.gLong - p1.gLong) * ratio,
-      lat: p1.lat + (p2.lat - p1.lat) * ratio,
-      lng: p1.lng + (p2.lng - p1.lng) * ratio,
-      time: t
-    };
-  };
-
-  const getSector = (dist: number) => {
-    return MOCK_TRACK.sectors.find(s => dist >= s.startDist && dist < s.endDist)?.id || 1;
-  };
-
-  // --- Main Animation Loop ---
-  const animate = (timestamp: number) => {
-    // If using Real GPS, we don't use the simulation loop for physics.
-    // We only use this loop to update the Timer and UI interpolation if needed.
-    if (useRealGps) {
-      if (isActive && startTimeRef.current === 0) startTimeRef.current = timestamp;
-
-      const elapsedTotal = isActive ? (timestamp - startTimeRef.current) : 0;
-      const currentLapTimeSec = elapsedTotal / 1000;
-      setLapTime(currentLapTimeSec);
-      lapTimeRef.current = currentLapTimeSec;
-
-      // In Real Mode, physics update happens in the Geolocation Callback.
-      // We just ensure the Refs are up to date for the UI
-      requestRef.current = requestAnimationFrame(animate);
-      return;
-    }
-
-    // --- Simulation Mode ---
-    if (!startTimeRef.current) startTimeRef.current = timestamp;
-    const elapsedTotal = (timestamp - startTimeRef.current);
-
-    const lapDurationMs = userLap.time * 1000;
-    const currentLapTimeMs = elapsedTotal % lapDurationMs;
-    const currentLapTimeSec = currentLapTimeMs / 1000;
-
-    const userState = getTelemetryAtTime(userLap, currentLapTimeSec);
-    const userProgress = userState.distance / MOCK_TRACK.length;
-
-    // Ghost (Ideal Lap) logic - NOW PHYSICS BASED
-    // We get the actual position of the Ideal Lap at this timestamp
-    const ghostState = getTelemetryAtTime(idealLap, currentLapTimeSec);
-    const ghostProgress = ghostState.distance / MOCK_TRACK.length;
-
-    // Calc Delta
-    // Compare where I am vs where I should be at this time
-    // If I'm at 100m, and at this time the Ideal Lap was at 120m, I am behind.
-    // Delta ~ Distance Diff / Speed
-    const distDiff = userState.distance - ghostState.distance;
-    const currentSpeedMs = Math.max(10, userState.speed) * 0.44704; // mph to m/s
-    const calcDelta = distDiff / currentSpeedMs;
-
-    setProgress(Math.min(1, Math.max(0, userProgress)));
-    setGhostProgress(Math.min(1, Math.max(0, ghostProgress)));
-    setCurrentPos({ lat: userState.lat, lng: userState.lng });
-
-    // Update State
-    setSpeed(Math.round(userState.speed));
-    setGLat(userState.gLat);
-    setGLong(userState.gLong);
-    setLapTime(currentLapTimeSec);
-    setDelta(calcDelta);
-
-    // Update Refs for Audio/AI
-    speedRef.current = Math.round(userState.speed);
-    gLatRef.current = userState.gLat;
-    gLongRef.current = userState.gLong;
-    deltaRef.current = calcDelta;
-    currentSectorRef.current = getSector(userState.distance);
-    currentDistRef.current = Math.round(userState.distance);
-    lapTimeRef.current = currentLapTimeSec;
-
-    handleAudioCues(userState.gLat, userState.gLong);
-
-    const newLap = Math.floor(elapsedTotal / lapDurationMs) + 1;
-    if (newLap !== currentLapRef.current) {
-      currentLapRef.current = newLap;
-      setCurrentLap(newLap);
-    }
-
-    requestRef.current = requestAnimationFrame(animate);
-  };
+  // Use state for track so we can update it with CSV geometry
+  const [activeTrack, setActiveTrack] = useState<Track>(MOCK_TRACK);
 
   const handleAudioCues = (lat: number, long: number) => {
     if (isVoiceConnectedRef.current && outputContextRef.current) {
@@ -360,154 +163,285 @@ export const LiveSession: React.FC = () => {
     }
   };
 
-  // --- GPS Physics Engine (SSE Implementation) ---
+  // --- Helper: Coordinate Parsing for VBOX ---
+  const parseCoord = (str: string) => {
+    // Basic parsing for "38°9.631176 N" or standard float strings
+    if (!str) return 0;
+    // Check if it's already a simple float string
+    if (!str.includes('°')) {
+      const f = parseFloat(str);
+      return isNaN(f) ? 0 : f;
+    }
+    const match = str.match(/(\d+)°([\d\.]+)\s+([NSEW])/);
+    if (!match) return 0;
+    let val = parseInt(match[1]) + parseFloat(match[2]) / 60;
+    if (match[3] === 'S' || match[3] === 'W') val = -val;
+    return val;
+  };
+
+  // --- Helper: VBOX Time Parsing ---
+  const vboxTimeToSeconds = (str: string): number => {
+    // VBOX Time format: HHMMSS.sss (e.g., 212159.900)
+    const s = str.trim();
+    // Basic validation
+    if (s.length < 4) return 0;
+
+    // If it doesn't look like HHMMSS (e.g. just seconds), try float
+    if (!s.includes('.') && s.length < 6) return parseFloat(s);
+
+    // Parse HH, MM, SS.sss
+    // We assume at least HHMMSS structure if length is sufficient
+    // But sometimes it might be just MMSS? VBOX mock is usually HHMMSS.
+
+    // Safe parsing:
+    // Extract parts based on fixed width for standard VBOX CSV
+    const hh = parseInt(s.substring(0, 2), 10) || 0;
+    const mm = parseInt(s.substring(2, 4), 10) || 0;
+    const ss = parseFloat(s.substring(4)) || 0;
+
+    return (hh * 3600) + (mm * 60) + ss;
+  };
+
+  // --- DATA INGESTION ENGINE ---
   useEffect(() => {
-    if (useRealGps && isActive) {
-      setGpsError(null);
+    // Always load the CSV map data on mount so both modes use the real track geometry.
+    fetch('/VBOX0240.csv')
+      .then(r => r.text())
+      .then(text => {
+        const lines = text.split('\n');
+        if (lines.length < 2) return;
 
-      const service = new GpsSSEService(GPS_SSE_URL);
-      gpsServiceRef.current = service;
+        // Simple CSV parsing assuming specific VBOX format
+        const rows = lines.slice(1).map(line => {
+          const cols = line.split(',');
+          if (cols.length < 6) return null;
+          return {
+            'Time': vboxTimeToSeconds(cols[0]), // Parse HHMMSS.sss to seconds
+            'Speed (km/h)': cols[2],
+            'Heading (Degrees)': cols[3],
+            'Latitude': cols[4],
+            'Longitude': cols[5],
+            'Lateral acceleration (g)': cols[16],
+            'Longitudinal acceleration (g)': cols[17]
+          };
+        }).filter(r => r);
 
-      service.connect(
-        (point) => {
-          const now = new Date(point.time).getTime(); // Use packet time for sync if possible
-          const arrivalTime = Date.now();
+        // Project CSV points to Track Map (Sampled)
+        // Use same projection logic as TrackVisualizer
+        const SCALE_X = 80000;
+        const SCALE_Y = 100000;
+        const cx = 350;
+        const cy = 250;
+        const trackCenter = MOCK_TRACK.center;
 
-          // AUTO-TRANSPOSE LOGIC: 
-          // If this is the first point (or offset is null) AND we have a track center,
-          // check if we are far away (>10km). If so, calculate offset to move car to track.
-          if (!gpsOffsetRef.current && activeTrack.center) {
-            const dist = Math.sqrt(Math.pow(point.lat - activeTrack.center.lat, 2) + Math.pow(point.lon - activeTrack.center.lng, 2));
-            // Simple deg distance check. 0.1 deg ~ 11km.
-            if (dist > 0.1) {
-              console.log("GPS mismatch detected. Auto-transposing to Track Center.");
-              gpsOffsetRef.current = {
-                lat: activeTrack.center.lat - point.lat,
-                lon: activeTrack.center.lng - point.lon
-              };
-            } else {
-              gpsOffsetRef.current = { lat: 0, lon: 0 };
-            }
-          }
+        const sampledPoints = [];
+        const sampleRate = Math.max(1, Math.floor(rows.length / 1000)); // Target ~1000 points for smoother curves
 
-          const offset = gpsOffsetRef.current || { lat: 0, lon: 0 };
-          const effectiveLat = point.lat + offset.lat;
-          const effectiveLon = point.lon + offset.lon;
+        for (let i = 0; i < rows.length; i += sampleRate) {
+          const r = rows[i];
+          const lat = parseCoord(r['Latitude']);
+          const lon = parseCoord(r['Longitude']);
 
-          // 1. Calculate Time Delta (dt)
-          // Use packet timestamp if available and reliable, otherwise use arrival time?
-          // For smooth physics, using arrival time (performance.now) might be better if packets are real-time.
-          // But let's use the packet time to handle out-of-order slightly better if needed.
-          // Actually, let's stick to arrival time delta for simplicity unless we buffer.
-          const dt = (arrivalTime - lastGpsUpdateRef.current) / 1000;
+          const dx = (lon - trackCenter.lng) * SCALE_X;
+          const dy = (trackCenter.lat - lat) * SCALE_Y;
 
-          // 2. Speed
-          // SSE gives speed in m/s
-          const speedMs = point.speed;
-          const speedMph = speedMs * 2.23694;
-
-          // 3. Longitudinal G (Acceleration/Braking)
-          // a = dv / dt
-          // Note: point.climb is vertical speed, not accel. 
-          // We can calculate accel from speed change.
-          const dv = speedMs - lastGpsSpeedRef.current;
-          // Avoid division by zero or huge jumps on first packet
-          const accelMs2 = (dt > 0 && dt < 1) ? dv / dt : 0;
-          const longG = accelMs2 / 9.81;
-
-          // 4. Lateral G (Cornering)
-          // a = v * omega (Yaw Rate)
-          // Yaw Rate = dHeading / dt
-          let dHeading = point.track - lastGpsHeadingRef.current;
-          // Handle 359->1 degree wrap
-          if (dHeading > 180) dHeading -= 360;
-          if (dHeading < -180) dHeading += 360;
-
-          const yawRateRadS = (dt > 0 && dt < 1) ? (dHeading * (Math.PI / 180)) / dt : 0;
-          const latAccelMs2 = speedMs * yawRateRadS;
-          const latG = latAccelMs2 / 9.81;
-
-          // 5. Update State &
-          setSpeed(Math.round(speedMph));
-
-          // EMA Filter
-          const alpha = 0.3;
-          const smoothLongG = (longG * alpha) + (gLongRef.current * (1 - alpha));
-          const smoothLatG = (latG * alpha) + (gLatRef.current * (1 - alpha));
-
-          setGLat(smoothLatG);
-          setGLong(smoothLongG);
-          setCurrentPos({ lat: effectiveLat, lng: effectiveLon });
-
-          speedRef.current = Math.round(speedMph);
-          gLatRef.current = smoothLatG;
-          gLongRef.current = smoothLongG;
-
-          // Visualizer Update (Legacy points array - optional now)
-          setGpsPoints(prev => {
-            // Simple scaling for demo - in real app use map projection
-            const newP = { x: (point.lon + 180) * 50, y: (point.lat + 90) * 50 };
-            const next = [...prev, newP];
-            if (next.length > 200) return next.slice(next.length - 200);
-            return next;
-          });
-
-          // Update history
-          lastGpsUpdateRef.current = arrivalTime;
-          lastGpsSpeedRef.current = speedMs;
-          lastGpsHeadingRef.current = point.track;
-
-          handleAudioCues(smoothLatG, smoothLongG);
-        },
-        (status) => {
-          setSseStatus(status);
-          if (status === 'connected') setGpsError(null);
-        },
-        (err) => {
-          setGpsError(err);
+          sampledPoints.push({ x: cx + dx, y: cy + dy });
         }
-      );
 
-    } else {
-      // Cleanup
-      if (gpsServiceRef.current) {
-        gpsServiceRef.current.disconnect();
-        gpsServiceRef.current = null;
+        csvDataRef.current = rows;
+
+        // Calculate actual duration from CSV time (first vs last)
+        let durationSeconds = 108.5; // Default fallback
+        if (rows.length > 1) {
+          const startTime = rows[0]['Time'];
+          const endTime = rows[rows.length - 1]['Time'];
+          if (typeof startTime === 'number' && typeof endTime === 'number') {
+            durationSeconds = (endTime - startTime) / 1000; // Assuming time is in milliseconds
+          }
+        }
+
+        // Overwrite track mapPoints with actual driven path for ALL modes
+        setActiveTrack(prev => ({
+          ...prev,
+          mapPoints: sampledPoints,
+          recordLap: durationSeconds // Update recordLap with calculated duration
+        }));
+      })
+      .catch(err => console.error("Failed to load CSV", err));
+  }, []); // Run once on mount
+
+  useEffect(() => {
+    let intervalId: any;
+    let eventSource: EventSource | null = null;
+
+    const handleUpdate = (data: any) => {
+      let speed = 0;
+      let lat = 0;
+      let lon = 0;
+      let heading = 0;
+      let gLat = 0; // Derived if possible
+      let gLong = 0;
+
+      if (telemetrySource === 'csv-replay') {
+        // data is CSV row object
+        speed = parseFloat(data['Speed (km/h)'] || '0');
+
+        lat = parseCoord(data['Latitude']);
+        lon = parseCoord(data['Longitude']);
+        heading = parseFloat(data['Heading (Degrees)'] || '0');
+        gLat = parseFloat(data['Lateral acceleration (g)'] || '0');
+        gLong = parseFloat(data['Longitudinal acceleration (g)'] || '0');
+
+      } else {
+        // VBOX Stream (TPV JSON from ingest.py)
+        // {"class":"TPV","time":"...","lat":...,"lon":...,"speed":... (m/s),"track":...}
+        if (data.class === 'TPV') {
+          speed = (data.speed || 0) * 3.6; // m/s to km/h
+          lat = data.lat;
+          lon = data.lon;
+          heading = data.track;
+          // VBOX stream might not send Gs in TPV, ignore for now or calc derivative
+        } else {
+          return; // Ignore non-TPV
+        }
       }
-      if (!isActive) {
-        setGpsError(null);
-        setSseStatus('disconnected');
+
+      setCurrentData({
+        speed: Math.round(speed),
+        gear: Math.min(6, Math.max(1, Math.floor(speed / 30))), // Mock logic for gear
+        rpm: 3000 + (speed * 50) % 4000,
+        throttle: speed > 10 ? 80 : 0,
+        brake: speed < 5 ? 50 : 0,
+        lat,
+        lon,
+        heading,
+        gLat,
+        gLong
+      });
+
+      if (visualizerRef.current) {
+        visualizerRef.current.updatePosition({ lat, lon, heading });
+        // Ghost runs at record lap pace (using actual CSV duration now)
+        const recordTimeMs = activeTrack.recordLap * 1000;
+        // Simple loop based on elapsed session time
+        const elapsed = performance.now() - startTimeRef.current;
+        const ghostProgress = (elapsed % recordTimeMs) / recordTimeMs;
+        visualizerRef.current.updateProgress(0, ghostProgress);
+      }
+
+      // Update refs
+      speedRef.current = speed;
+      gLatRef.current = gLat;
+      gLongRef.current = gLong;
+
+      // Coaching Calls
+      handleAudioCues(gLat, gLong);
+
+      // --- LAP TIMING AND DELTA LOGIC ---
+      const now = performance.now();
+
+      // Simple Start/Finish Line Detection (Crossing the "first point" of the track)
+      // MOCK_TRACK is roughly centered. Let's assume start/finish is near index 0 of the map points?
+      // Or better, let's just track "distance traveled" if we had it, but we only have Lat/Lon.
+      // We'll use a proximity check to the track start point (MOCK_TRACK.mapPoints[0] is visual, not geo).
+      // Let's use MOCK_TRACK.center as a reference? No.
+      // For now, let's just use a simple time-based "lap" for demo purposes or CSV loop detection
+      if (telemetrySource === 'csv-replay') {
+        // Detect loop in CSV index
+        if (csvIndexRef.current === 0 && csvDataRef.current.length > 0 && currentLapRef.current > 0) {
+          // Lap completed
+          currentLapRef.current += 1;
+          // Mock lap time based on CSV duration or just timestamp?
+          // If we assume 10Hz, length / 10 is lap time
+          const lapTime = csvDataRef.current.length / 10;
+          lapTimeRef.current = lapTime;
+          deltaRef.current = (Math.random() - 0.5) * 2.0; // Mock delta
+        }
+      }
+
+      // ... Coaching logic ... (keep existing)
+      if (now - lastHotActionTime.current > 100) {
+        getHotAction({
+          speedKmh: speed,
+          rpm: 0,
+          throttle: 0,
+          brakePos: 0,
+          latG: gLat,
+          longG: gLong
+        }, activeCoach).then(action => setHotAction(action));
+        lastHotActionTime.current = now;
+      }
+
+      if (now - lastColdAdviceTime.current > 5000) {
+        getColdAdvice({
+          speedKmh: speed,
+          rpm: 0,
+          throttle: 0,
+          brakePos: 0,
+          latG: gLat,
+          longG: gLong
+        }, activeCoach).then(advice => {
+          if (advice.message !== "No advice available.") {
+            setColdAdvice(advice);
+          }
+        });
+        lastColdAdviceTime.current = now;
+      }
+    };
+
+    if (isActive) {
+      if (startTimeRef.current === 0) startTimeRef.current = performance.now();
+
+      if (telemetrySource === 'csv-replay') {
+        // Data is already loaded in the mount useEffect
+        intervalId = setInterval(() => {
+          if (csvDataRef.current.length > 0) {
+            const pt = csvDataRef.current[csvIndexRef.current];
+            if (pt) handleUpdate(pt);
+            csvIndexRef.current = (csvIndexRef.current + 1) % csvDataRef.current.length;
+          }
+        }, 100); // 10Hz
+      } else {
+        // VBOX Stream
+        setStreamConnected(false);
+        eventSource = new EventSource('http://localhost:8000/events');
+
+        eventSource.onopen = () => {
+          console.log("VBOX Stream Connected");
+          setStreamConnected(true);
+        };
+        eventSource.onmessage = (e) => {
+          try {
+            const json = JSON.parse(e.data);
+            handleUpdate(json);
+          } catch (err) {
+            console.error("Stream parse error", err);
+          }
+        };
+        eventSource.onerror = (e) => {
+          console.error("Stream error", e);
+          setStreamConnected(false);
+          if (eventSource) eventSource.close();
+        };
       }
     }
 
     return () => {
-      if (gpsServiceRef.current) {
-        gpsServiceRef.current.disconnect();
+      if (intervalId) clearInterval(intervalId);
+      if (eventSource) {
+        eventSource.close();
+        setStreamConnected(false);
       }
     };
-  }, [useRealGps, isActive]);
+  }, [isActive, telemetrySource]); // Re-run when source/active changes
 
-  useEffect(() => {
-    if (isActive) {
-      startTimeRef.current = 0; // Reset timer on start
-      requestRef.current = requestAnimationFrame(animate);
-    } else {
-      cancelAnimationFrame(requestRef.current);
-      // Reset Telemetry display
-      setGLat(0);
-      setGLong(0);
-      setSpeed(0);
-    }
-    return () => cancelAnimationFrame(requestRef.current);
-  }, [isActive, useRealGps]);
-
-  // --- Voice Connection Logic (Same as before) ---
+  // --- Voice Connection Logic ---
   const connectToVoiceCoach = async () => {
     if (isVoiceConnectedRef.current || voiceStatus === 'connecting') return;
 
     try {
       setVoiceStatus('connecting');
-      const apiKey = process.env.API_KEY;
+      const apiKey = process.env.API_KEY || localStorage.getItem('GEMINI_API_KEY');
       if (!apiKey) throw new Error("API Key missing");
 
       const ai = new GoogleGenAI({ apiKey });
@@ -538,7 +472,7 @@ export const LiveSession: React.FC = () => {
       nextStartTimeRef.current = outputContext.currentTime;
 
       const sessionPromise = ai.live.connect({
-        model: 'gemini-2.5-flash-native-audio-preview-09-2025',
+        model: 'gemini-2.0-flash-exp', // Updated model
         config: {
           responseModalities: [Modality.AUDIO],
           speechConfig: {
@@ -567,11 +501,10 @@ export const LiveSession: React.FC = () => {
               });
             };
 
-            // IMMEDIATE RADIO CHECK: Force the model to speak as soon as connection opens
             sessionPromise.then(session => {
               const s = session as any;
               if (typeof s.send === 'function') {
-                s.send({ parts: [{ text: "The driver has just connected the radio. Give a short, professional F1 radio check immediately. e.g. 'Radio check. Loud and clear.'" }] });
+                s.send({ parts: [{ text: "Radio check." }] });
               }
             });
           },
@@ -593,19 +526,16 @@ export const LiveSession: React.FC = () => {
             }
 
             if (serverContent?.interrupted) {
-              console.log("Model interrupted");
               sourcesRef.current.forEach(node => { try { node.stop(); } catch (e) { } });
               sourcesRef.current.clear();
               nextStartTimeRef.current = outputContextRef.current ? outputContextRef.current.currentTime : 0;
             }
           },
           onclose: () => {
-            console.log("Gemini Live Session Closed");
             setVoiceStatus('disconnected');
             isVoiceConnectedRef.current = false;
           },
           onerror: (err) => {
-            console.error("Gemini Live Error:", err);
             setVoiceStatus('error');
             isVoiceConnectedRef.current = false;
             disconnectVoiceCoach();
@@ -616,7 +546,6 @@ export const LiveSession: React.FC = () => {
       sessionPromiseRef.current = sessionPromise;
 
     } catch (error) {
-      console.error("Failed to connect voice:", error);
       setVoiceStatus('error');
       isVoiceConnectedRef.current = false;
     }
@@ -663,205 +592,170 @@ export const LiveSession: React.FC = () => {
     };
   }, []);
 
-  useEffect(() => {
-    let interval: ReturnType<typeof setInterval>;
-
-    if (isVoiceConnectedRef.current && isActive) {
-      interval = setInterval(() => {
-        if (sessionPromiseRef.current) {
-          // Send rich telemetry
-          const telemetryMsg = `[TELEMETRY] LapTime: ${lapTimeRef.current.toFixed(2)}s. Sector: ${currentSectorRef.current}. Dist: ${currentDistRef.current}m. Speed: ${speedRef.current}mph. Delta: ${deltaRef.current > 0 ? '+' : ''}${deltaRef.current.toFixed(2)}s. G-Lat: ${gLatRef.current.toFixed(2)}. G-Long: ${gLongRef.current.toFixed(2)}.`;
-          sessionPromiseRef.current.then(session => {
-            const s = session as any;
-            if (typeof s.send === 'function') {
-              s.send({ parts: [{ text: telemetryMsg }] });
-            }
-          }).catch(() => { });
-        }
-      }, 3500);
-    }
-
-    return () => clearInterval(interval);
-  }, [voiceStatus, isActive]); // Depend on voiceStatus to trigger re-effect
-
-  const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
-    const ms = Math.floor((seconds % 1) * 100);
-    return `${mins}:${secs.toString().padStart(2, '0')}.${ms.toString().padStart(2, '0')}`;
-  };
-
   return (
-    <div className="h-full w-full relative bg-[#0B0F19] overflow-hidden">
+    <div className="flex-1 relative flex flex-col h-full bg-slate-900 overflow-hidden">
 
-      {/* --- SIMPLIFIED RACE HUD --- */}
-      <div className="absolute top-0 left-0 right-0 z-20 flex h-24 md:h-32 border-b border-white/10 shadow-2xl">
+      {/* 3D Track Background */}
+      <div className="absolute inset-0 z-0">
+        <TrackVisualizer ref={visualizerRef} track={activeTrack} />
 
-        {/* BIG DELTA (Primary Driver Metric) */}
-        <div className={`flex-1 flex flex-col items-center justify-center transition-colors duration-200 ${delta > 0 ? 'bg-rose-900/80 text-rose-500' : 'bg-emerald-900/80 text-emerald-400'}`}>
-          <span className="text-xs md:text-sm font-black uppercase tracking-[0.2em] opacity-80">Time Delta</span>
-          <span className="text-6xl md:text-8xl font-black font-mono tracking-tighter leading-none">
-            {delta > 0 ? '+' : ''}{Math.abs(delta).toFixed(2)}
-          </span>
+
+      </div>
+
+      {/* --- HUD --- */}
+      <div className="relative z-10 p-4 md:p-8 flex flex-col justify-between h-full pointer-events-none">
+
+        {/* Telemetry Source Selector (Moved for Visibility) */}
+        <div className="absolute top-4 left-4 z-50 flex flex-col gap-2 pointer-events-auto">
+          <div className="flex gap-2">
+            <button
+              onClick={() => setTelemetrySource('csv-replay')}
+              className={`px-3 py-1.5 text-xs font-bold rounded-lg border transition-all ${telemetrySource === 'csv-replay' ? 'bg-blue-600/80 border-blue-400 text-white shadow-[0_0_10px_rgba(37,99,235,0.5)]' : 'bg-black/40 border-slate-700 text-slate-400 backdrop-blur hover:bg-black/60'}`}
+            >
+              CSV REPLAY
+            </button>
+            <button
+              onClick={() => setTelemetrySource('vbox-stream')}
+              className={`px-3 py-1.5 text-xs font-bold rounded-lg border flex items-center gap-2 transition-all ${telemetrySource === 'vbox-stream' ? 'bg-purple-600/80 border-purple-400 text-white shadow-[0_0_10px_rgba(147,51,234,0.5)]' : 'bg-black/40 border-slate-700 text-slate-400 backdrop-blur hover:bg-black/60'}`}
+            >
+              VBOX LIVE
+              <div className={`w-2 h-2 rounded-full ${streamConnected ? 'bg-emerald-400 shadow-[0_0_5px_#34d399]' : 'bg-slate-500'}`} />
+            </button>
+          </div>
+          {telemetrySource === 'vbox-stream' && !streamConnected && isActive && (
+            <div className="text-[10px] text-amber-400 bg-black/60 px-2 py-1 rounded border border-amber-500/30">
+              Waiting for stream on localhost:8000...
+            </div>
+          )}
         </div>
 
-        {/* SECONDARY INFO (Speed & Lap) */}
-        <div className="flex-1 bg-[#0B0F19]/95 backdrop-blur flex flex-col">
-          {/* Speed */}
-          <div className="flex-1 flex items-center justify-center border-b border-white/10 relative">
-            <div className="flex items-baseline gap-2">
-              <span className="text-5xl md:text-7xl font-bold font-mono text-white tracking-tighter">{speed}</span>
-              <span className="text-sm md:text-xl font-bold text-slate-500">MPH</span>
+        {/* Top Bar */}
+        <div className="flex justify-between items-start pointer-events-auto">
+          <div className="glass-panel p-3 md:p-4 rounded-xl flex gap-6 md:gap-8 backdrop-blur-xl bg-slate-900/50 border border-white/10">
+            <div>
+              <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Lap Time</p>
+              <p className="text-2xl md:text-4xl font-mono font-black text-white tabular-nums">
+                {lapTimeRef.current.toFixed(2)}<span className="text-sm md:text-lg text-slate-500">s</span>
+              </p>
             </div>
-            {/* Source Indicator */}
-            <div className="absolute top-2 right-2 flex items-center gap-1.5 px-2 py-1 rounded bg-white/5 border border-white/10">
-              <MapPin size={10} className={useRealGps ? (sseStatus === 'connected' ? "text-emerald-500" : "text-amber-500 animate-pulse") : "text-amber-500"} />
-              <span className="text-[10px] font-mono text-slate-400">
-                {useRealGps ? `GPS SSE (${sseStatus.toUpperCase()})` : 'SIMULATION'}
+            <div>
+              <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Delta</p>
+              <p className={`text-2xl md:text-4xl font-mono font-black tabular-nums ${deltaRef.current > 0 ? 'text-rose-500' : 'text-emerald-500'}`}>
+                {deltaRef.current > 0 ? '+' : ''}{deltaRef.current.toFixed(2)}
+              </p>
+            </div>
+            <div className="hidden md:block">
+              <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Speed</p>
+              <p className="text-2xl md:text-4xl font-mono font-black text-white">
+                {currentData.speed}<span className="text-lg text-slate-500">KM/H</span>
+              </p>
+            </div>
+          </div>
+
+          {/* AI Info & Controls */}
+          <div className="flex flex-col gap-2 items-end">
+            {/* Voice Status / AI Mode */}
+            <div className={`px-3 py-1.5 rounded-full flex items-center gap-2 border transition-colors backdrop-blur ${voiceStatus === 'connected' ? 'border-emerald-500/50 bg-emerald-950/30' :
+              isActive ? 'border-amber-500/50 bg-amber-950/30' :
+                'border-slate-700 bg-slate-900/50'
+              }`}>
+              {voiceStatus === 'connecting' && <div className="w-2 h-2 rounded-full bg-amber-500 animate-ping" />}
+              {voiceStatus === 'connected' && <div className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_8px_#10b981]" />}
+              {voiceStatus === 'disconnected' && isActive && <div className="w-2 h-2 rounded-full bg-amber-500 shadow-[0_0_8px_#f59e0b]" />}
+              {voiceStatus === 'disconnected' && !isActive && <div className="w-2 h-2 rounded-full bg-slate-500" />}
+
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-300">
+                {voiceStatus === 'connected' ? 'AI RACE ENGINEER' : isActive ? 'AI COACH ACTIVE' : 'AI STANDBY'}
               </span>
             </div>
           </div>
-          {/* Lap Time */}
-          <div className="h-10 md:h-12 flex items-center justify-between px-6 bg-slate-900/50">
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-widest">Lap {currentLap}</span>
-            <span className="text-lg md:text-xl font-mono font-bold text-white">{formatTime(lapTime)}</span>
-          </div>
-        </div>
-      </div>
-
-      {/* --- World: Map --- */}
-      <div className="absolute inset-0 z-0 bg-[#0B0F19] pt-[96px] md:pt-[128px] pb-[100px] md:pb-[100px] flex items-center justify-center">
-        <div className="w-full h-full max-w-7xl p-4">
-          <GoogleMapsTrack
-            track={activeTrack}
-            carPosition={currentPos}
-            apiKey={mapsKey}
-            className="w-full h-full shadow-2xl"
-          />
         </div>
 
-        {/* API Key Modal/Input Overlay */}
-        {(!mapsKey || showKeyModal) && (
-          <div className="absolute inset-0 z-[60] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-            <div className="bg-slate-900 border border-slate-700 p-6 rounded-2xl max-w-md w-full shadow-2xl">
-              <h3 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
-                <Key className="text-amber-500" /> Configure Maps API
-              </h3>
-              <p className="text-slate-400 text-sm mb-4">
-                Enter your Google Maps API Key to enable the satellite track visualizer.
-                This key is stored locally in your browser.
-              </p>
-              <input
-                type="text"
-                value={mapsKey}
-                onChange={(e) => setMapsKey(e.target.value)}
-                placeholder="AIzaSy..."
-                className="w-full bg-slate-950 border border-slate-700 rounded-lg px-4 py-3 text-white font-mono text-sm mb-4 focus:border-sky-500 focus:outline-none"
-              />
-              <div className="flex justify-end gap-3">
-                {mapsKey && (
-                  <button
-                    onClick={() => {
-                      localStorage.setItem('GOOGLE_MAPS_KEY', mapsKey);
-                      setShowKeyModal(false);
-                    }}
-                    className="bg-sky-500 hover:bg-sky-400 text-white font-bold py-2 px-6 rounded-lg transition-colors"
-                  >
-                    Save & Continue
-                  </button>
-                )}
-                <button
-                  onClick={() => setShowKeyModal(false)}
-                  className="text-slate-500 hover:text-slate-300 font-bold py-2 px-4"
-                >
-                  Close
-                </button>
+        {/* --- COACHING LAYER --- */}
+        <div className="absolute top-32 left-0 right-0 z-30 pointer-events-none p-4 flex flex-col gap-4">
+          {/* HOT ADVICE (Nano) */}
+          <div className="flex justify-center">
+            <div className="flex flex-col items-center gap-1 transition-all duration-200" style={{ transform: hotAction.action !== 'WAITING' ? 'scale(1.1)' : 'scale(1)', opacity: hotAction.action !== 'WAITING' ? 1 : 0.5 }}>
+              <div className="px-6 py-2 bg-black/80 backdrop-blur border-2 rounded-full shadow-2xl flex items-center gap-3" style={{ borderColor: hotAction.color }}>
+                <span className="w-3 h-3 rounded-full animate-pulse" style={{ backgroundColor: hotAction.color }}></span>
+                <span className="text-2xl md:text-4xl font-black italic tracking-tighter text-white uppercase" style={{ textShadow: `0 0 20px ${hotAction.color}` }}>
+                  {hotAction.action}
+                </span>
               </div>
             </div>
           </div>
-        )}
 
-        {/* Settings/Key Button (Top Right) */}
-        <button
-          onClick={() => setShowKeyModal(true)}
-          className="absolute top-28 right-4 z-40 p-2 bg-slate-900/50 hover:bg-slate-800 text-slate-400 hover:text-white rounded-lg border border-white/10 transition-colors"
-        >
-          <Settings size={20} />
-        </button>
-
-        {/* GPS Error Toast */}
-        {useRealGps && gpsError && (
-          <div className="absolute top-28 left-0 right-0 flex justify-center z-50 pointer-events-none">
-            <div className="bg-rose-500 text-white px-4 py-2 rounded-full shadow-lg flex items-center gap-2 animate-pulse">
-              <AlertTriangle size={16} />
-              <span className="text-xs font-bold uppercase tracking-wide">{gpsError}</span>
-            </div>
+          {/* COLD ADVICE (Cloud) */}
+          <div className="flex justify-end px-4">
+            {coldAdvice.message !== "Analyzing telemetry..." && (
+              <div className="max-w-sm w-full bg-[#111]/90 backdrop-blur-md border border-[#333] rounded-xl overflow-hidden shadow-2xl transition-all animate-fade-in-up">
+                <div className="px-4 py-2 bg-[#1a1a1a] border-b border-[#333] flex justify-between items-center">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-bold text-purple-400 uppercase tracking-wider">Coach Analysis</span>
+                  </div>
+                  <span className="text-[10px] font-mono text-[#666]">{coldAdvice.latency ? `${coldAdvice.latency} ms` : ''}</span>
+                </div>
+                <div className="p-4">
+                  <div className="text-lg font-bold text-white leading-tight mb-2">"{coldAdvice.message}"</div>
+                  <div className="text-xs text-gray-400 leading-relaxed font-mono">{coldAdvice.detail}</div>
+                </div>
+              </div>
+            )}
           </div>
-        )}
-
-        {/* G-Force Gauge (GPS Inferred) */}
-        <div className="absolute bottom-32 right-4 md:bottom-28 md:right-8 pointer-events-none z-10">
-          <GForceGauge lat={gLat} long={gLong} />
         </div>
 
-        {/* Voice Clues */}
-        {isVoiceConnectedRef.current && (
-          <div className="absolute bottom-32 left-4 md:bottom-28 md:left-8 z-10">
-            <VoiceClue />
+        {/* --- COACH SELECTION --- */}
+        <div className="absolute top-20 right-4 md:right-8 z-30 pointer-events-auto flex flex-col items-end gap-2">
+          <div className="bg-black/80 backdrop-blur border border-white/20 rounded-lg p-2 flex flex-col gap-2">
+            <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-wider text-right">Active Coach</span>
+            <div className="flex gap-1">
+              {(['SUPER_AJ', 'AJ', 'TONY', 'RACHEL', 'GARMIN'] as CoachPersona[]).map(coach => (
+                <button
+                  key={coach}
+                  onClick={() => setActiveCoach(coach)}
+                  className={`px-3 py-1.5 rounded text-[10px] font-bold uppercase tracking-wider transition-all
+                               ${activeCoach === coach
+                      ? 'bg-white text-black shadow-lg scale-105'
+                      : 'bg-zinc-800 text-zinc-500 hover:bg-zinc-700 hover:text-zinc-300'}`}
+                >
+                  {coach === 'SUPER_AJ' ? 'SUPER' : coach}
+                </button>
+              ))}
+            </div>
           </div>
-        )}
-      </div>
+        </div>
 
-      {/* --- HUD: Fixed Footer --- */}
-      <div className="fixed bottom-0 left-0 right-0 z-[100] w-full p-4 pb-12 md:p-6 bg-[#0B0F19]/95 backdrop-blur-xl border-t border-white/10 flex gap-3 items-center shadow-[0_-10px_40px_rgba(0,0,0,0.5)]">
+        {/* --- CONTROLS FOOTER --- */}
+        <div className="flex justify-center gap-4 pointer-events-auto pb-8">
 
-        {/* GPS Source Toggle */}
-        <button
-          onClick={() => setUseRealGps(!useRealGps)}
-          className={`shrink-0 h-14 w-14 rounded-xl flex items-center justify-center transition-all border shadow-lg active:scale-95 ${useRealGps
-            ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400 shadow-emerald-900/20'
-            : 'bg-slate-800 border-white/10 text-slate-500 hover:text-slate-300'
-            }`}
-          title={useRealGps ? "Switch to Simulation" : "Switch to Real GPS"}
-        >
-          <LocateFixed size={24} className={useRealGps ? "animate-pulse" : ""} />
-        </button>
+          {/* Start/Stop Session */}
+          <button
+            onClick={() => setIsActive(!isActive)}
+            className={`h-12 px-8 rounded-full font-black uppercase tracking-widest text-sm flex items-center justify-center gap-2 transition-all shadow-lg ${isActive
+              ? 'bg-rose-600 hover:bg-rose-500 text-white border border-rose-400'
+              : 'bg-[#00ffa3] hover:bg-[#00dd8c] text-black border border-[#4dffc0]'
+              }`}
+          >
+            {isActive ? (
+              <> <Square size={16} fill="currentColor" /> STOP SESSION </>
+            ) : (
+              <> <Play size={20} fill="currentColor" /> START {telemetrySource === 'vbox-stream' ? 'STREAM' : 'REPLAY'} </>
+            )}
+          </button>
 
-        {/* Voice Toggle */}
-        <button
-          onClick={toggleVoice}
-          className={`shrink-0 h-14 w-14 rounded-xl flex items-center justify-center transition-all border shadow-lg active:scale-95 ${isVoiceConnectedRef.current
-            ? 'bg-sky-500/20 border-sky-500 text-sky-400 shadow-sky-900/20'
-            : 'bg-slate-800 border-white/10 text-slate-300 hover:bg-slate-700'
-            }`}
-        >
-          {voiceStatus === 'connecting' ? (
-            <Radio className="animate-pulse" size={24} />
-          ) : isVoiceConnectedRef.current ? (
-            <Mic size={24} />
-          ) : (
-            <MicOff size={24} />
-          )}
-        </button>
+          {/* Voice Toggle */}
+          <button
+            onClick={toggleVoice}
+            className={`h-12 w-12 rounded-full flex items-center justify-center transition-all border shadow-lg ${isVoiceConnectedRef.current
+              ? 'bg-sky-500/20 border-sky-500 text-sky-400'
+              : 'bg-slate-800 border-white/10 text-slate-300 hover:bg-slate-700'
+              }`}
+          >
+            {voiceStatus === 'connecting' ? <Radio className="animate-pulse" size={20} /> : isVoiceConnectedRef.current ? <Mic size={20} /> : <MicOff size={20} />}
+          </button>
 
-        {/* Start/Stop Button */}
-        <button
-          onClick={() => setIsActive(!isActive)}
-          className={`flex-1 h-14 rounded-xl font-black uppercase tracking-widest text-base flex items-center justify-center gap-3 transition-all shadow-[0_0_20px_rgba(0,0,0,0.3)] active:scale-95 ${isActive
-            ? 'bg-rose-600 hover:bg-rose-500 text-white border border-rose-400 shadow-rose-900/30'
-            : 'bg-[#00ffa3] hover:bg-[#00dd8c] text-black border border-[#4dffc0] shadow-[0_0_20px_rgba(0,255,163,0.3)]'
-            }`}
-        >
-          {isActive ? (
-            <>
-              <Square size={20} fill="currentColor" /> <span>STOP</span>
-            </>
-          ) : (
-            <>
-              <Play size={24} fill="currentColor" /> <span>START {useRealGps ? 'GPS' : 'SESSION'}</span>
-            </>
-          )}
-        </button>
+        </div>
+
       </div>
     </div>
   );

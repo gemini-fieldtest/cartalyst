@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Navbar } from './components/Navbar';
 import { Dashboard } from './pages/Dashboard';
-import { LiveSession } from './pages/LiveSession';
+import LiveSession from './pages/LiveSession';
 import { Analysis } from './pages/Analysis';
 import { ViewState } from './types';
 
@@ -17,9 +17,9 @@ const App: React.FC = () => {
       case ViewState.DASHBOARD:
       default:
         return (
-          <Dashboard 
-            onGoToLive={() => setCurrentView(ViewState.LIVE)} 
-            onGoToAnalysis={() => setCurrentView(ViewState.ANALYSIS)} 
+          <Dashboard
+            onGoToLive={() => setCurrentView(ViewState.LIVE)}
+            onGoToAnalysis={() => setCurrentView(ViewState.ANALYSIS)}
           />
         );
     }
