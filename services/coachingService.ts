@@ -1,4 +1,4 @@
-// Imports removed as part of REST API migration
+import { coachAudio } from './audioService';
 
 // --- Types ---
 
@@ -151,22 +151,8 @@ CRITICAL ERRORS TO CATCH:
         };
         const color = colorMap[normalizedAction] || "#a855f7";
 
-        // Audio Feedback
-        if (normalizedAction !== "STABILIZE" && normalizedAction !== lastSpokenAction) {
-            if ('speechSynthesis' in window) {
-                const utterance = new SpeechSynthesisUtterance(normalizedAction);
-                utterance.rate = 1.2;
-                const voices = window.speechSynthesis.getVoices();
-                let voice = null;
-                if (activeCoach === 'TONY') voice = voices.find(v => v.name.includes('Male') && v.lang.includes('US'));
-                if (activeCoach === 'RACHEL') voice = voices.find(v => v.name.includes('Female') && v.lang.includes('US'));
-                if (activeCoach === 'GARMIN') voice = voices.find(v => v.name.includes('Google US English'));
-                if (voice) utterance.voice = voice;
-
-                window.speechSynthesis.speak(utterance);
-            }
-            lastSpokenAction = normalizedAction;
-        }
+        // Audio Feedback - use pre-cached audio for low latency
+        coachAudio.play(normalizedAction);
 
         session.destroy();
 

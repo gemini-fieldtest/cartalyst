@@ -6,6 +6,7 @@ import { GoogleGenAI, LiveServerMessage, Modality } from "@google/genai";
 import { Track } from '../types';
 import { TelemetryStream, type CoachingFrame, type ConnectionState } from '../services/TelemetryStreamService';
 import { getHotAction, getColdAdvice, type HotAction, type ColdAdvice, type CoachPersona } from '../services/coachingService';
+import { coachAudio } from '../services/audioService';
 
 // === Audio Utilities ===
 
@@ -311,7 +312,10 @@ export default function LiveSession() {
 
   // === Session Control ===
 
-  const startSession = () => {
+  const startSession = async () => {
+    // Initialize audio on user interaction (required for autoplay policy)
+    await coachAudio.initialize();
+
     sessionStartRef.current = performance.now();
     setIsSessionActive(true);
     setHotAction({ action: 'READY', color: '#22c55e' });
