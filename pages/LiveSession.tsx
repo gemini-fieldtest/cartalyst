@@ -440,7 +440,7 @@ export default function LiveSession() {
       };
 
       const session = ai.live.connect({
-        model: 'gemini-2.5-flash',
+        model: 'fiercefalcon',
         config: {
           responseModalities: [Modality.AUDIO],
           speechConfig: {
