@@ -11,6 +11,14 @@ export interface TelemetryData {
     longG: number;
 }
 
+export interface ShadowContext {
+    delta: number;           // +/- seconds vs shadow
+    sectorIndex: number;     // Current sector (0-based)
+    sectorDeltas: number[];  // Delta per sector
+    distanceInLap: number;   // Meters into current lap
+    shadowSpeedKmh?: number; // Speed the shadow was doing at this point
+}
+
 export interface HotAction {
     action: string;
     color: string;
@@ -257,7 +265,11 @@ CONSTRAINT: Maximum 6 words. Descriptive and Actionable.
 const BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
 
 // --- COLD PATH: GEMINI CLOUD (REST API) ---
-export const getColdAdvice = async (data: TelemetryData, activeCoach: CoachPersona = 'SUPER_AJ'): Promise<ColdAdvice> => {
+export const getColdAdvice = async (
+    data: TelemetryData,
+    activeCoach: CoachPersona = 'SUPER_AJ',
+    shadowContext?: ShadowContext
+): Promise<ColdAdvice> => {
     const startTime = performance.now();
     // @ts-ignore - Vite types might not be fully loaded in this context
     const apiKey = import.meta.env.VITE_GEMINI_API_KEY || (process as any).env.VITE_GEMINI_API_KEY || (process as any).env.API_KEY;
@@ -276,16 +288,37 @@ export const getColdAdvice = async (data: TelemetryData, activeCoach: CoachPerso
     if (activeCoach === 'AJ') systemPrompt = COACH_AJ_SYSTEM_PROMPT;
     if (activeCoach === 'GARMIN') systemPrompt = COACH_GARMIN_SYSTEM_PROMPT;
 
+    // Build Shadow Line context if available
+    let shadowPrompt = '';
+    if (shadowContext) {
+        const deltaStatus = shadowContext.delta < -0.1 ? 'AHEAD' :
+                           shadowContext.delta > 0.1 ? 'BEHIND' : 'EVEN';
+        const worstSector = shadowContext.sectorDeltas.indexOf(Math.max(...shadowContext.sectorDeltas));
+        const bestSector = shadowContext.sectorDeltas.indexOf(Math.min(...shadowContext.sectorDeltas));
+
+        shadowPrompt = `
+      SHADOW LINE COMPARISON:
+      Overall Delta: ${shadowContext.delta > 0 ? '+' : ''}${shadowContext.delta.toFixed(2)}s (${deltaStatus})
+      Current Sector: S${shadowContext.sectorIndex + 1}
+      Sector Deltas: ${shadowContext.sectorDeltas.map((d, i) => `S${i + 1}: ${d > 0 ? '+' : ''}${d.toFixed(2)}s`).join(', ')}
+      Weakest Sector: S${worstSector + 1} (${shadowContext.sectorDeltas[worstSector] > 0 ? '+' : ''}${shadowContext.sectorDeltas[worstSector]?.toFixed(2)}s)
+      Strongest Sector: S${bestSector + 1} (${shadowContext.sectorDeltas[bestSector] > 0 ? '+' : ''}${shadowContext.sectorDeltas[bestSector]?.toFixed(2)}s)
+      ${shadowContext.shadowSpeedKmh ? `Shadow Speed at This Point: ${shadowContext.shadowSpeedKmh.toFixed(0)} km/h (You: ${data.speedKmh.toFixed(0)} km/h)` : ''}
+
+      PRIORITY: Focus advice on the weakest sector and current delta trend.`;
+    }
+
     const prompt = `
       ${systemPrompt}
-      
+
       CURRENT TELEMETRY:
       Speed: ${data.speedKmh.toFixed(0)} km/h
       LatG: ${data.latG.toFixed(2)} G
       Brake Pressure: ${data.brakePos.toFixed(0)} %
       Throttle: ${data.throttle.toFixed(0)} %
-      
-      INSTRUCTION: Provide 1 sentence of coaching advice in JSON format.
+      ${shadowPrompt}
+
+      INSTRUCTION: Provide 1 sentence of coaching advice in JSON format.${shadowContext ? ' Reference the Shadow Line data when relevant.' : ''}
       OUTPUT SCHEMA: { "message": "The advice", "reasoning": "Technical justification" }
     `;
 

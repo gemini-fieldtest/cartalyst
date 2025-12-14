@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { TrackVisualizer } from '../components/TrackVisualizer';
-import { Play, Square, Mic, MicOff, Radio, Wifi, WifiOff, Zap, RefreshCw } from 'lucide-react';
+import { Play, Square, Mic, MicOff, Radio, Wifi, WifiOff, Zap, RefreshCw, Ghost } from 'lucide-react';
 import { MOCK_TRACK } from '../constants';
 import { GoogleGenAI, LiveServerMessage, Modality } from "@google/genai";
 import { Track } from '../types';
 import { TelemetryStream, type CoachingFrame, type ConnectionState } from '../services/TelemetryStreamService';
-import { getHotAction, getColdAdvice, type HotAction, type ColdAdvice, type CoachPersona } from '../services/coachingService';
+import { getHotAction, getColdAdvice, type HotAction, type ColdAdvice, type CoachPersona, type ShadowContext } from '../services/coachingService';
+import { ShadowLineEngine, type ShadowState, type LapRecord } from '../services/ShadowLineEngine';
 
 // === Audio Utilities ===
 
@@ -112,6 +113,11 @@ export default function LiveSession() {
   const [lapTime, setLapTime] = useState(0);
   const [delta, setDelta] = useState(0);
   const [currentLap, setCurrentLap] = useState(1);
+
+  // Shadow Line state
+  const [shadowState, setShadowState] = useState<ShadowState | null>(null);
+  const [shadowEnabled, setShadowEnabled] = useState(true);
+  const [completedLaps, setCompletedLaps] = useState<LapRecord[]>([]);
 
   // File replay state
   const replayDataRef = useRef<any[]>([]);
@@ -224,6 +230,49 @@ export default function LiveSession() {
       .catch(console.error);
   }, []);
 
+  // === Configure Shadow Line Engine ===
+
+  useEffect(() => {
+    // Configure based on current track
+    if (activeTrack.center) {
+      ShadowLineEngine.configure({
+        startFinishLine: { lat: activeTrack.center.lat, lon: activeTrack.center.lng },
+        startFinishRadius: 30,
+        minLapTime: 30,
+        sectors: activeTrack.sectors.map(s => ({
+          id: s.id,
+          name: s.name,
+          startDistance: s.startDist,
+          endDistance: s.endDist
+        })),
+        trackLength: activeTrack.length
+      });
+    }
+  }, [activeTrack]);
+
+  // === Subscribe to Shadow Line Engine ===
+
+  useEffect(() => {
+    const unsubShadow = ShadowLineEngine.subscribe((state) => {
+      setShadowState(state);
+      // Update delta from shadow state
+      if (state.currentDelta !== undefined) {
+        setDelta(state.currentDelta);
+      }
+    });
+
+    const unsubLap = ShadowLineEngine.onLapComplete((lap) => {
+      setCompletedLaps(ShadowLineEngine.getCompletedLaps());
+      setCurrentLap(lap.lapNumber + 1);
+      setLapTime(lap.lapTime);
+    });
+
+    return () => {
+      unsubShadow();
+      unsubLap();
+    };
+  }, []);
+
   // === Subscribe to TelemetryStream service ===
 
   useEffect(() => {
@@ -240,6 +289,11 @@ export default function LiveSession() {
 
   const handleIncomingFrame = useCallback((frame: CoachingFrame) => {
     setLiveFrame(frame);
+
+    // Feed frame to Shadow Line Engine for lap detection and delta calculation
+    if (shadowEnabled) {
+      ShadowLineEngine.ingest(frame);
+    }
 
     // Update visualizer
     if (visualizerRef.current) {
@@ -276,6 +330,25 @@ export default function LiveSession() {
     if (now - lastColdCallRef.current > 5000) {
       lastColdCallRef.current = now;
 
+      // Build shadow context for AI coaching
+      const currentShadowState = ShadowLineEngine.getState();
+      let shadowCtx: ShadowContext | undefined;
+
+      if (shadowEnabled && currentShadowState.shadowLapId) {
+        const currentSector = currentShadowState.sectorDeltas.findIndex((_, idx) => {
+          const sector = activeTrack.sectors[idx];
+          return sector && currentShadowState.distanceInLap >= sector.startDist && currentShadowState.distanceInLap < sector.endDist;
+        });
+
+        shadowCtx = {
+          delta: currentShadowState.currentDelta,
+          sectorIndex: currentSector >= 0 ? currentSector : 0,
+          sectorDeltas: currentShadowState.sectorDeltas,
+          distanceInLap: currentShadowState.distanceInLap,
+          shadowSpeedKmh: currentShadowState.shadowPosition?.speedKmh
+        };
+      }
+
       getColdAdvice({
         speedKmh: frame.speedKmh,
         rpm: frame.rpm,
@@ -283,11 +356,11 @@ export default function LiveSession() {
         brakePos: frame.brakePct,
         latG: frame.gLateral,
         longG: frame.gLongitudinal
-      }, activeCoach).then(advice => {
+      }, activeCoach, shadowCtx).then(advice => {
         if (advice.message) setColdAdvice(advice);
       });
     }
-  }, [activeCoach, activeTrack.recordLap]);
+  }, [activeCoach, activeTrack.recordLap, activeTrack.sectors, shadowEnabled]);
 
   // === G-Force Audio Cues ===
 
@@ -318,6 +391,11 @@ export default function LiveSession() {
     setCurrentLap(1);
     setLapTime(0);
     setDelta(0);
+
+    // Reset Shadow Line Engine for new session
+    ShadowLineEngine.reset();
+    setCompletedLaps([]);
+    setShadowState(null);
 
     if (dataSource === 'file-replay') {
       startFileReplay();
@@ -545,7 +623,7 @@ Only speak when there's significant change or advice needed.`
 
       {/* Track Visualization Background */}
       <div className="absolute inset-0 z-0">
-        <TrackVisualizer ref={visualizerRef} track={activeTrack} />
+        <TrackVisualizer ref={visualizerRef} track={activeTrack} shadowState={shadowEnabled ? shadowState : null} />
       </div>
 
       {/* HUD Overlay */}
@@ -634,8 +712,47 @@ Only speak when there's significant change or advice needed.`
             </div>
           </div>
 
-          {/* AI Status */}
+          {/* AI Status + Shadow Line */}
           <div className="flex flex-col gap-2 items-end">
+            {/* Shadow Line Toggle & Status */}
+            <button
+              onClick={() => setShadowEnabled(!shadowEnabled)}
+              className={`px-3 py-1.5 rounded-full flex items-center gap-2 border transition-all backdrop-blur ${
+                shadowEnabled
+                  ? 'border-purple-500/50 bg-purple-950/30 shadow-[0_0_15px_rgba(168,85,247,0.3)]'
+                  : 'border-slate-700 bg-slate-900/50 opacity-60'
+              }`}
+            >
+              <Ghost size={12} className={shadowEnabled ? 'text-purple-400' : 'text-slate-500'} />
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-300">
+                SHADOW {shadowEnabled ? 'ON' : 'OFF'}
+              </span>
+              {shadowEnabled && shadowState?.shadowLapId && (
+                <span className="text-[9px] text-purple-400/70 font-mono">
+                  L{completedLaps.length}
+                </span>
+              )}
+            </button>
+
+            {/* Sector Deltas */}
+            {shadowEnabled && shadowState && shadowState.sectorDeltas.length > 0 && (
+              <div className="flex gap-1">
+                {shadowState.sectorDeltas.map((delta, idx) => (
+                  <div
+                    key={idx}
+                    className={`px-2 py-1 rounded text-[9px] font-mono font-bold tabular-nums border backdrop-blur ${
+                      delta < -0.1 ? 'bg-emerald-950/50 border-emerald-500/30 text-emerald-400' :
+                      delta > 0.1 ? 'bg-rose-950/50 border-rose-500/30 text-rose-400' :
+                      'bg-slate-800/50 border-slate-600/30 text-slate-400'
+                    }`}
+                  >
+                    S{idx + 1}: {delta > 0 ? '+' : ''}{delta.toFixed(2)}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* AI Status */}
             <div className={`px-3 py-1.5 rounded-full flex items-center gap-2 border transition-colors backdrop-blur ${
               voiceStatus === 'active' ? 'border-emerald-500/50 bg-emerald-950/30' :
               isSessionActive ? 'border-amber-500/50 bg-amber-950/30' :
