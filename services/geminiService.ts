@@ -71,7 +71,7 @@ export const analyzeLap = async (
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'fiercefalcon',
       contents: prompt,
       config: {
         responseMimeType: "application/json",
@@ -102,7 +102,7 @@ export const getLiveCoachingTip = async (context: string): Promise<string> => {
 
     try {
          const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
+            model: 'fiercefalcon',
             contents: `You are a F1 Race Engineer. The driver is currently ${context}. Give a VERY SHORT, coded radio command (max 5 words).`,
           });
           return response.text?.trim() || "Push harder.";

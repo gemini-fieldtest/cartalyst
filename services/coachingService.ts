@@ -166,7 +166,7 @@ CRITICAL ERRORS TO CATCH:
 
 // --- CONFIGURATION ---
 // ENVIRONMENT CONSTRAINT: 
-const PRIMARY_MODEL = 'gemini-2.5-flash-preview-09-2025';
+const PRIMARY_MODEL = 'fiercefalcon';
 
 // --- COACH PERSONAS ---
 export type CoachPersona = 'TONY' | 'RACHEL' | 'AJ' | 'GARMIN' | 'SUPER_AJ';
