@@ -88,7 +88,7 @@ const CONNECTION_STATE_LABELS: Record<ConnectionState, string> = {
 export default function LiveSession() {
   // Data source configuration
   const [dataSource, setDataSource] = useState<DataSource>('file-replay');
-  const [streamEndpoint, setStreamEndpoint] = useState('http://localhost:8000/events');
+  const [streamEndpoint, setStreamEndpoint] = useState('http://localhost:8000/sse');
 
   // Connection state from TelemetryStream service
   const [connectionState, setConnectionState] = useState<ConnectionState>('idle');

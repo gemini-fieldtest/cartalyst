@@ -75,7 +75,7 @@ class TelemetryStreamEngine {
   private positionHistory: Array<{ t: number; lat: number; lon: number; speed: number; heading: number }> = [];
   private frameSequence = 0;
 
-  private constructor() {}
+  private constructor() { }
 
   static getInstance(): TelemetryStreamEngine {
     if (!TelemetryStreamEngine.instance) {
@@ -150,6 +150,7 @@ class TelemetryStreamEngine {
       };
 
       this.eventSource.onmessage = (event) => {
+        console.log('[TelemetryStream] Raw SSE data:', event.data);
         if (this.state === 'paused') return;
         this.ingest(event.data);
       };
@@ -204,10 +205,14 @@ class TelemetryStreamEngine {
   private ingest(raw: string): void {
     try {
       const msg = JSON.parse(raw);
+      console.log('[TelemetryStream] Parsed JSON:', msg.class || 'direct');
       const frame = this.parseMessage(msg);
 
       if (frame) {
+        console.log('[TelemetryStream] Frame created:', { lat: frame.lat, lon: frame.lon, speed: frame.speedKmh });
         this.frameListeners.forEach(fn => fn(frame));
+      } else {
+        console.log('[TelemetryStream] No frame created from message');
       }
     } catch {
       // Try CSV format as fallback
