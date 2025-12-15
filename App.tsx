@@ -3,6 +3,7 @@ import { Navbar } from './components/Navbar';
 import { Dashboard } from './pages/Dashboard';
 import LiveSession from './pages/LiveSession';
 import { Analysis } from './pages/Analysis';
+import { VideoAnalysis } from './pages/VideoAnalysis';
 import { ViewState } from './types';
 
 const App: React.FC = () => {
@@ -14,6 +15,8 @@ const App: React.FC = () => {
         return <LiveSession />;
       case ViewState.ANALYSIS:
         return <Analysis />;
+      case ViewState.VIDEO:
+        return <VideoAnalysis />;
       case ViewState.DASHBOARD:
       default:
         return (
