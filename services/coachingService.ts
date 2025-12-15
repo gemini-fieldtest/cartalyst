@@ -36,18 +36,87 @@ declare global {
 // --- STATE ---
 let lastSpokenAction = "";
 
-// --- HOT PATH: GEMINI NANO (Browser) ---
+// --- HEURISTIC FALLBACK (when Gemini Nano unavailable) ---
+const getHeuristicAction = (data: TelemetryData): HotAction => {
+    const { speedKmh, throttle, brakePos, latG, longG } = data;
+
+    // Debug: Log telemetry values occasionally
+    if (Math.random() < 0.1) {
+        console.log('[HEURISTIC] Telemetry:', { speedKmh: speedKmh?.toFixed(1), throttle: throttle?.toFixed(1), brakePos: brakePos?.toFixed(1), latG: latG?.toFixed(3), longG: longG?.toFixed(3) });
+    }
+
+    // Color Map
+    const colors: Record<string, string> = {
+        THRESHOLD: "#ef4444", TRAIL_BRAKE: "#ef4444", BRAKE: "#ef4444", WAIT: "#ef4444",
+        TURN_IN: "#3b82f6", COMMIT: "#3b82f6", ROTATE: "#3b82f6", APEX: "#3b82f6",
+        THROTTLE: "#f97316", UNWIND: "#f97316", TRACK_OUT: "#f97316", PUSH: "#f97316", ACCELERATE: "#f97316", SEND_IT: "#f97316",
+        SMOOTH: "#eab308", BALANCE: "#eab308", NO_COAST: "#eab308",
+        GOOD: "#22c55e", NICE: "#22c55e", OPTIMAL: "#22c55e",
+        MAINTAIN: "#a855f7", STABILIZE: "#a855f7"
+    };
+
+    let action = "MAINTAIN";
+
+    // Heavy braking zone (lowered thresholds)
+    if (brakePos > 30 && longG < -0.2) {
+        action = "THRESHOLD";
+    }
+    // Trail braking into corner
+    else if (brakePos > 5 && Math.abs(latG) > 0.1) {
+        action = "TRAIL_BRAKE";
+    }
+    // Mid-corner commitment
+    else if (Math.abs(latG) > 0.3 && throttle < 40) {
+        action = "COMMIT";
+    }
+    // Corner exit - time to throttle
+    else if (Math.abs(latG) > 0.15 && Math.abs(latG) < 0.4 && throttle < 60) {
+        action = "THROTTLE";
+    }
+    // Full acceleration
+    else if (throttle > 60 && Math.abs(latG) < 0.1) {
+        action = "PUSH";
+    }
+    // Coasting (bad!) - only trigger occasionally
+    else if (throttle < 15 && brakePos < 5 && speedKmh > 80 && Math.random() < 0.1) {
+        action = "NO_COAST";
+    }
+    // Accelerating hard
+    else if (longG > 0.1 && throttle > 50) {
+        action = "ACCELERATE";
+    }
+    // Good corner work
+    else if (Math.abs(latG) > 0.2 && brakePos < 10 && throttle > 15) {
+        action = "GOOD";
+    }
+    // Turn-in point
+    else if (brakePos > 10 && Math.abs(latG) > 0.05) {
+        action = "TURN_IN";
+    }
+    // Default to something other than MAINTAIN occasionally
+    else if (speedKmh > 100 && Math.random() < 0.3) {
+        action = "PUSH";
+    }
+
+
+    return { action, color: colors[action] || "#a855f7" };
+};
+
+// --- HOT PATH: GEMINI NANO (Browser) with Heuristic Fallback ---
 export const getHotAction = async (data: TelemetryData, activeCoach: CoachPersona = 'SUPER_AJ'): Promise<HotAction> => {
     try {
         // Fallback for non-Chrome-Canary browsers or missing flags
         if (typeof window === 'undefined') {
-            return { action: "STABILIZE", color: "#a855f7" };
+            return getHeuristicAction(data);
         }
 
         const lm = (window as any).LanguageModel;
 
         if (!lm) {
-            return { action: "GEMINI NANO NOT AVAILABLE", color: "#a855f7" };
+            // Use heuristic fallback and play audio
+            const result = getHeuristicAction(data);
+            coachAudio.play(result.action);
+            return result;
         }
 
         // Dynamic System Prompt based on Coach
