@@ -5,7 +5,7 @@ import { MOCK_TRACK } from '../constants';
 import { GoogleGenAI, LiveServerMessage, Modality } from "@google/genai";
 import { Track } from '../types';
 import { TelemetryStream, type CoachingFrame, type ConnectionState } from '../services/TelemetryStreamService';
-import { getHotAction, getColdAdvice, type HotAction, type ColdAdvice, type CoachPersona } from '../services/coachingService';
+import { getHotAction, getColdAdvice, getFeedForwardAction, type HotAction, type ColdAdvice, type FeedForwardAdvice, type CoachPersona } from '../services/coachingService';
 import { coachAudio } from '../services/audioService';
 
 // === Audio Utilities ===
@@ -146,57 +146,41 @@ export default function LiveSession() {
 
   // G-force audio cue timing
   const lastGForceCueRef = useRef(0);
+  const lastFeedForwardRef = useRef(0); // Debounce for feed-forward
 
-  // === VBOX CSV Parsing Helpers ===
+  // === GPS Data Parsing ===
 
-  const parseVBOXCoord = (str: string): number => {
-    if (!str) return 0;
-    if (!str.includes('°')) return parseFloat(str) || 0;
-
-    const match = str.match(/(\d+)°([\d.]+)\s*([NSEW])/);
-    if (!match) return 0;
-
-    let val = parseInt(match[1]) + parseFloat(match[2]) / 60;
-    if (match[3] === 'S' || match[3] === 'W') val = -val;
-    return val;
-  };
-
-  const parseVBOXTime = (str: string): number => {
-    const s = str.trim();
-    if (s.length < 6) return parseFloat(s) || 0;
-
-    const hh = parseInt(s.substring(0, 2), 10) || 0;
-    const mm = parseInt(s.substring(2, 4), 10) || 0;
-    const ss = parseFloat(s.substring(4)) || 0;
-    return hh * 3600 + mm * 60 + ss;
+  const parseTimestamp = (str: string): number => {
+    return new Date(str).getTime() / 1000;
   };
 
   // === Load CSV for file replay mode ===
 
   useEffect(() => {
-    fetch('/VBOX0240.csv')
+    fetch('/mock_gps.txt')
       .then(r => r.text())
       .then(text => {
         const lines = text.split('\n');
-        if (lines.length < 2) return;
+        if (lines.length < 1) return;
 
-        const rows = lines.slice(1).map(line => {
+        const rows = lines.map(line => {
           const cols = line.split(',');
-          if (cols.length < 18) return null;
+          if (cols.length < 5) return null;
 
           return {
-            time: parseVBOXTime(cols[0]),
-            speed: parseFloat(cols[2]) || 0,
-            heading: parseFloat(cols[3]) || 0,
-            lat: parseVBOXCoord(cols[4]),
-            lon: parseVBOXCoord(cols[5]),
-            gLat: parseFloat(cols[16]) || 0,
-            gLong: parseFloat(cols[17]) || 0,
-            throttle: parseFloat(cols[40]) || 0,
-            brake: parseFloat(cols[25]) || 0,
-            rpm: parseFloat(cols[29]) || 0,
-            gear: parseInt(cols[32]) || 0,
-            steering: parseFloat(cols[39]) || 0
+            time: parseTimestamp(cols[0]),
+            speed: parseFloat(cols[3]) || 0,
+            heading: parseFloat(cols[4]) || 0,
+            lat: parseFloat(cols[1]) || 0,
+            lon: parseFloat(cols[2]) || 0,
+            // Mock G-forces/Telemetry if missing
+            gLat: 0,
+            gLong: 0,
+            throttle: 0,
+            brake: 0,
+            rpm: 0,
+            gear: 0,
+            steering: 0
           };
         }).filter(Boolean);
 
@@ -218,7 +202,7 @@ export default function LiveSession() {
 
         const duration = rows.length > 1
           ? ((rows[rows.length - 1] as any).time - (rows[0] as any).time)
-          : 108.5;
+          : 120; // Default fallback
 
         setActiveTrack(prev => ({ ...prev, mapPoints, recordLap: duration }));
       })
@@ -253,6 +237,25 @@ export default function LiveSession() {
       const elapsed = performance.now() - sessionStartRef.current;
       const ghostProgress = (elapsed % (activeTrack.recordLap * 1000)) / (activeTrack.recordLap * 1000);
       visualizerRef.current.updateProgress(0, ghostProgress);
+
+      // Feed-Forward Coaching (Real-Time GPS Geofencing)
+      if (performance.now() - lastFeedForwardRef.current > 1000) {
+        if (activeTrack.corners && liveFrame) {
+          // Use REAL GPS coordinates from the frame
+          const advice = getFeedForwardAction(liveFrame.lat, liveFrame.lon, activeTrack.corners);
+          if (advice) {
+            console.log("Feed Forward (GPS):", advice);
+            setHotAction({ action: "LISTEN", color: "#3b82f6" });
+            setColdAdvice({ message: advice.message, detail: `${advice.distanceToCorner}m to turn` });
+
+            const utterance = new SpeechSynthesisUtterance(advice.message);
+            utterance.rate = 1.2;
+            window.speechSynthesis.speak(utterance);
+
+            lastFeedForwardRef.current = performance.now();
+          }
+        }
+      }
     }
 
     // G-force audio feedback
@@ -488,7 +491,7 @@ Only speak when there's significant change or advice needed.`
             }
 
             if (msg.serverContent?.interrupted) {
-              audioContextRefs.current.sources.forEach(s => { try { s.stop(); } catch {} });
+              audioContextRefs.current.sources.forEach(s => { try { s.stop(); } catch { } });
               audioContextRefs.current.sources.clear();
               audioContextRefs.current.nextPlayTime = audioContextRefs.current.output?.currentTime || 0;
             }
@@ -514,11 +517,11 @@ Only speak when there's significant change or advice needed.`
 
     refs.stream?.getTracks().forEach(t => t.stop());
     refs.processor?.disconnect();
-    refs.sources.forEach(s => { try { s.stop(); } catch {} });
+    refs.sources.forEach(s => { try { s.stop(); } catch { } });
     refs.input?.close();
     refs.output?.close();
 
-    voiceSessionRef.current?.then(s => s.close()).catch(() => {});
+    voiceSessionRef.current?.then(s => s.close()).catch(() => { });
     voiceSessionRef.current = null;
 
     audioContextRefs.current = {
@@ -560,39 +563,35 @@ Only speak when there's significant change or advice needed.`
           <div className="flex gap-2">
             <button
               onClick={() => { setDataSource('file-replay'); stopSession(); }}
-              className={`px-3 py-1.5 text-xs font-bold rounded-lg border transition-all ${
-                dataSource === 'file-replay'
-                  ? 'bg-blue-600/80 border-blue-400 text-white shadow-[0_0_10px_rgba(37,99,235,0.5)]'
-                  : 'bg-black/40 border-slate-700 text-slate-400 backdrop-blur hover:bg-black/60'
-              }`}
+              className={`px-3 py-1.5 text-xs font-bold rounded-lg border transition-all ${dataSource === 'file-replay'
+                ? 'bg-blue-600/80 border-blue-400 text-white shadow-[0_0_10px_rgba(37,99,235,0.5)]'
+                : 'bg-black/40 border-slate-700 text-slate-400 backdrop-blur hover:bg-black/60'
+                }`}
             >
               FILE REPLAY
             </button>
             <button
               onClick={() => { setDataSource('live-stream'); stopSession(); }}
-              className={`px-3 py-1.5 text-xs font-bold rounded-lg border flex items-center gap-2 transition-all ${
-                dataSource === 'live-stream'
-                  ? 'bg-purple-600/80 border-purple-400 text-white shadow-[0_0_10px_rgba(147,51,234,0.5)]'
-                  : 'bg-black/40 border-slate-700 text-slate-400 backdrop-blur hover:bg-black/60'
-              }`}
+              className={`px-3 py-1.5 text-xs font-bold rounded-lg border flex items-center gap-2 transition-all ${dataSource === 'live-stream'
+                ? 'bg-purple-600/80 border-purple-400 text-white shadow-[0_0_10px_rgba(147,51,234,0.5)]'
+                : 'bg-black/40 border-slate-700 text-slate-400 backdrop-blur hover:bg-black/60'
+                }`}
             >
               LIVE STREAM
-              <div className={`w-2 h-2 rounded-full transition-colors ${
-                connectionState === 'live' ? 'bg-emerald-400 shadow-[0_0_5px_#34d399]' :
+              <div className={`w-2 h-2 rounded-full transition-colors ${connectionState === 'live' ? 'bg-emerald-400 shadow-[0_0_5px_#34d399]' :
                 connectionState === 'recovering' ? 'bg-amber-400 animate-pulse' :
-                'bg-slate-500'
-              }`} />
+                  'bg-slate-500'
+                }`} />
             </button>
           </div>
 
           {/* Connection status badge for live mode */}
           {dataSource === 'live-stream' && (
-            <div className={`text-[10px] px-2 py-1 rounded border flex items-center gap-2 ${
-              connectionState === 'live' ? 'bg-emerald-900/50 border-emerald-500/30 text-emerald-300' :
+            <div className={`text-[10px] px-2 py-1 rounded border flex items-center gap-2 ${connectionState === 'live' ? 'bg-emerald-900/50 border-emerald-500/30 text-emerald-300' :
               connectionState === 'recovering' ? 'bg-amber-900/50 border-amber-500/30 text-amber-300' :
-              connectionState === 'dead' ? 'bg-red-900/50 border-red-500/30 text-red-300' :
-              'bg-black/60 border-slate-700 text-slate-400'
-            }`}>
+                connectionState === 'dead' ? 'bg-red-900/50 border-red-500/30 text-red-300' :
+                  'bg-black/60 border-slate-700 text-slate-400'
+              }`}>
               {connectionState === 'recovering' && <RefreshCw size={10} className="animate-spin" />}
               {connectionState === 'live' && <Wifi size={10} />}
               {connectionState === 'dead' && <WifiOff size={10} />}
@@ -612,9 +611,8 @@ Only speak when there's significant change or advice needed.`
             </div>
             <div>
               <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Delta</p>
-              <p className={`text-2xl md:text-4xl font-mono font-black tabular-nums ${
-                delta > 0 ? 'text-rose-500' : 'text-emerald-500'
-              }`}>
+              <p className={`text-2xl md:text-4xl font-mono font-black tabular-nums ${delta > 0 ? 'text-rose-500' : 'text-emerald-500'
+                }`}>
                 {delta > 0 ? '+' : ''}{delta.toFixed(2)}
               </p>
             </div>
@@ -640,11 +638,10 @@ Only speak when there's significant change or advice needed.`
 
           {/* AI Status */}
           <div className="flex flex-col gap-2 items-end">
-            <div className={`px-3 py-1.5 rounded-full flex items-center gap-2 border transition-colors backdrop-blur ${
-              voiceStatus === 'active' ? 'border-emerald-500/50 bg-emerald-950/30' :
+            <div className={`px-3 py-1.5 rounded-full flex items-center gap-2 border transition-colors backdrop-blur ${voiceStatus === 'active' ? 'border-emerald-500/50 bg-emerald-950/30' :
               isSessionActive ? 'border-amber-500/50 bg-amber-950/30' :
-              'border-slate-700 bg-slate-900/50'
-            }`}>
+                'border-slate-700 bg-slate-900/50'
+              }`}>
               {voiceStatus === 'connecting' && <div className="w-2 h-2 rounded-full bg-amber-500 animate-ping" />}
               {voiceStatus === 'active' && <Zap size={12} className="text-emerald-400" />}
               {voiceStatus === 'off' && isSessionActive && <div className="w-2 h-2 rounded-full bg-amber-500" />}
@@ -715,11 +712,10 @@ Only speak when there's significant change or advice needed.`
                 <button
                   key={coach}
                   onClick={() => setActiveCoach(coach)}
-                  className={`px-2 py-1 rounded text-[9px] font-bold uppercase tracking-wider transition-all ${
-                    activeCoach === coach
-                      ? 'bg-white text-black shadow-lg scale-105'
-                      : 'bg-zinc-800 text-zinc-500 hover:bg-zinc-700 hover:text-zinc-300'
-                  }`}
+                  className={`px-2 py-1 rounded text-[9px] font-bold uppercase tracking-wider transition-all ${activeCoach === coach
+                    ? 'bg-white text-black shadow-lg scale-105'
+                    : 'bg-zinc-800 text-zinc-500 hover:bg-zinc-700 hover:text-zinc-300'
+                    }`}
                 >
                   {coach === 'SUPER_AJ' ? 'S' : coach[0]}
                 </button>
@@ -732,11 +728,10 @@ Only speak when there's significant change or advice needed.`
         <div className="flex justify-center gap-4 pointer-events-auto pb-8">
           <button
             onClick={isSessionActive ? stopSession : startSession}
-            className={`h-12 px-8 rounded-full font-black uppercase tracking-widest text-sm flex items-center justify-center gap-2 transition-all shadow-lg ${
-              isSessionActive
-                ? 'bg-rose-600 hover:bg-rose-500 text-white border border-rose-400'
-                : 'bg-[#00ffa3] hover:bg-[#00dd8c] text-black border border-[#4dffc0]'
-            }`}
+            className={`h-12 px-8 rounded-full font-black uppercase tracking-widest text-sm flex items-center justify-center gap-2 transition-all shadow-lg ${isSessionActive
+              ? 'bg-rose-600 hover:bg-rose-500 text-white border border-rose-400'
+              : 'bg-[#00ffa3] hover:bg-[#00dd8c] text-black border border-[#4dffc0]'
+              }`}
           >
             {isSessionActive ? (
               <><Square size={16} fill="currentColor" /> STOP</>
@@ -747,11 +742,10 @@ Only speak when there's significant change or advice needed.`
 
           <button
             onClick={toggleVoice}
-            className={`h-12 w-12 rounded-full flex items-center justify-center transition-all border shadow-lg ${
-              voiceStatus === 'active'
-                ? 'bg-sky-500/20 border-sky-500 text-sky-400'
-                : 'bg-slate-800 border-white/10 text-slate-300 hover:bg-slate-700'
-            }`}
+            className={`h-12 w-12 rounded-full flex items-center justify-center transition-all border shadow-lg ${voiceStatus === 'active'
+              ? 'bg-sky-500/20 border-sky-500 text-sky-400'
+              : 'bg-slate-800 border-white/10 text-slate-300 hover:bg-slate-700'
+              }`}
           >
             {voiceStatus === 'connecting' ? (
               <Radio className="animate-pulse" size={20} />

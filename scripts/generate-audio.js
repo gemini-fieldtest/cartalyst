@@ -14,10 +14,14 @@
  *   public/audio/THROTTLE.mp3, public/audio/BRAKE.mp3, etc.
  */
 
-const fs = require('fs');
-const path = require('path');
-const https = require('https');
-const { execSync } = require('child_process');
+import fs from 'fs';
+import path from 'path';
+import https from 'https';
+import { execSync } from 'child_process';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // All action words from coachingService.ts
 const ACTIONS = [
@@ -28,7 +32,7 @@ const ACTIONS = [
   // Exit phase
   'THROTTLE', 'UNWIND', 'TRACK_OUT', 'PUSH', 'ACCELERATE', 'SEND_IT',
   // Corrections
-  'SMOOTH', 'BALANCE', 'NO_COAST', 'EARLY', 'LATE',
+  'SMOOTH', 'BALANCE', 'NO_COAST', 'EARLY', 'LATE', 'STOP_BEING_A_WUSS',
   // Positive feedback
   'GOOD', 'NICE', 'OPTIMAL',
   // Neutral
@@ -80,7 +84,8 @@ function synthesizeSpeech(text, accessToken) {
       headers: {
         'Authorization': `Bearer ${accessToken}`,
         'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(requestBody)
+        'Content-Length': Buffer.byteLength(requestBody),
+        'x-goog-user-project': 'the-need-for-speed'
       }
     };
 

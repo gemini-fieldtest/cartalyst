@@ -35,9 +35,9 @@ export const analyzeLap = async (
     })),
     // Updated for MPH typical speeds
     corners: [
-        { name: "Turn 1", userMinSpeed: 55, idealMinSpeed: 62 },
-        { name: "Hairpin", userMinSpeed: 28, idealMinSpeed: 34 },
-        { name: "Back Straight", userTopSpeed: 145, idealTopSpeed: 149 }
+      { name: "Turn 1", userMinSpeed: 55, idealMinSpeed: 62 },
+      { name: "Hairpin", userMinSpeed: 28, idealMinSpeed: 34 },
+      { name: "Back Straight", userTopSpeed: 145, idealTopSpeed: 149 }
     ]
   };
 
@@ -64,6 +64,12 @@ export const analyzeLap = async (
     Corner Analysis (Speed in MPH):
     ${JSON.stringify(summary.corners)}
 
+    Start each tip with a specific reference to the corner or sector (e.g., "T3: ...").
+    
+    GOAL: The driver wants to break the 2:00 barrier.
+    - If Lap Time > 2:00: Identify the HUGE mistakes costing seconds. Be direct.
+    - If Lap Time < 2:00: focus on refinement to reach 1:55.
+    
     Provide 3 distinct, actionable, and technical coaching tips.
     Adopt a Race Engineer persona (e.g., "Gap is +0.3 in Sector 2", "Braking point Turn 1 needs adjustment").
     Focus on driving lines, braking points (inferred from decel), and corner speeds.
@@ -86,7 +92,7 @@ export const analyzeLap = async (
         }
       }
     });
-    
+
     const text = response.text;
     if (!text) return { tips: ["No analysis generated."] };
     return JSON.parse(text) as AnalysisResult;
@@ -97,16 +103,59 @@ export const analyzeLap = async (
 };
 
 export const getLiveCoachingTip = async (context: string): Promise<string> => {
-    const ai = getAiClient();
-    if (!ai) return "Drive smooth.";
+  const ai = getAiClient();
+  if (!ai) return "Drive smooth.";
 
-    try {
-         const response = await ai.models.generateContent({
-            model: 'fiercefalcon',
-            contents: `You are a F1 Race Engineer. The driver is currently ${context}. Give a VERY SHORT, coded radio command (max 5 words).`,
-          });
-          return response.text?.trim() || "Push harder.";
-    } catch (e) {
-        return "Focus forward.";
-    }
+  try {
+    const response = await ai.models.generateContent({
+      model: 'fiercefalcon',
+      contents: `You are a F1 Race Engineer. The driver is currently ${context}. Give a VERY SHORT, coded radio command (max 5 words).`,
+    });
+    return response.text?.trim() || "Push harder.";
+  } catch (e) {
+    return "Focus forward.";
+  }
+}
+
+// Convert File to Base64 helper
+const fileToGenerativePart = async (file: File): Promise<{ inlineData: { data: string; mimeType: string } }> => {
+  const base64EncodedDataPromise = new Promise<string>((resolve) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      if (typeof reader.result === 'string') {
+        resolve(reader.result.split(',')[1]);
+      }
+    };
+    reader.readAsDataURL(file);
+  });
+  return {
+    inlineData: { data: await base64EncodedDataPromise, mimeType: file.type },
+  };
+}
+
+export const analyzeVideo = async (file: File): Promise<string> => {
+  const ai = getAiClient();
+  if (!ai) return "API Key missing.";
+
+  try {
+    const filePart = await fileToGenerativePart(file);
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-1.5-flash', // Flash is better for video/multimodal
+      contents: [
+        {
+          role: 'user', parts: [
+            filePart,
+            { text: "Analyze this race track footage. Identify the cornering technique, lines, and any mistakes. Provide 3 bullet points of advice as a Professional Race Coach." }
+          ]
+        }
+      ]
+    });
+
+    return response.text?.trim() || "No analysis generated.";
+
+  } catch (error) {
+    console.error("Video Analysis Error:", error);
+    return "Error analyzing video. Ensure the file is a valid video format.";
+  }
 }

@@ -22,6 +22,11 @@ export interface ColdAdvice {
     latency?: number;
 }
 
+export interface FeedForwardAdvice {
+    message: string;
+    distanceToCorner: number;
+}
+
 // --- HACKS for Browser AI ---
 // We need to declare the global AI types for TypeScript if not already present
 declare global {
@@ -71,7 +76,8 @@ CRITICAL ERRORS TO CATCH:
 - COASTING between brake and throttle = "NO_COAST"
 - Throttle while still heavy braking = "WAIT"
 - Lifting mid-corner without cause = "COMMIT"
-- Late throttle application on exit = "THROTTLE"`;
+- Late throttle application on exit = "THROTTLE"
+- Breaking way too early or lifting on straights = "STOP_BEING_A_WUSS"`;
 
         if (activeCoach === 'TONY') {
             nanoSystemPrompt += `\n\nPERSONA: Encouraging, feel-based. Prefer: COMMIT, PUSH, SEND_IT, NICE. Ignore minor lift.`;
@@ -99,7 +105,7 @@ CRITICAL ERRORS TO CATCH:
                         // Exit phase
                         "THROTTLE", "UNWIND", "TRACK_OUT", "PUSH", "ACCELERATE",
                         // Corrections
-                        "SMOOTH", "BALANCE", "NO_COAST", "EARLY", "LATE",
+                        "SMOOTH", "BALANCE", "NO_COAST", "EARLY", "LATE", "STOP_BEING_A_WUSS",
                         // Positive feedback
                         "GOOD", "NICE", "OPTIMAL", "SEND_IT",
                         // Neutral
@@ -143,7 +149,7 @@ CRITICAL ERRORS TO CATCH:
             // Exit/Acceleration - Orange (power, aggression)
             THROTTLE: "#f97316", UNWIND: "#f97316", TRACK_OUT: "#f97316", PUSH: "#f97316", ACCELERATE: "#f97316", SEND_IT: "#f97316",
             // Corrections - Yellow (warning, adjust)
-            SMOOTH: "#eab308", BALANCE: "#eab308", NO_COAST: "#eab308", EARLY: "#eab308", LATE: "#eab308",
+            SMOOTH: "#eab308", BALANCE: "#eab308", NO_COAST: "#eab308", EARLY: "#eab308", LATE: "#eab308", STOP_BEING_A_WUSS: "#ef4444",
             // Positive - Green (good job)
             GOOD: "#22c55e", NICE: "#22c55e", OPTIMAL: "#22c55e",
             // Neutral - Purple
@@ -177,8 +183,8 @@ TONE: Colloquial, encouraging, "feel-based".
 KEY PHRASES: "Scoot out", "Good hustle", "Commit", "Pop it in", "Don't be a wuss".
 PHILOSOPHY:
 1. MENTAL CAPACITY: Focus on flow once braking is done.
-2. COMMITMENT: Delay throttle, then 100%.
-3. CONFIDENCE: Trust the car.
+2. COMMITMENT: Delay throttle, then 100%. Don't lift early.
+3. CONFIDENCE: Trust the car. If they lift early, tell them to stop being a wuss.
 INSTRUCTION:
 Analyze telemetry. Give punchy, encouraging advice.
 CONSTRAINT: Max 5 words.
@@ -321,4 +327,44 @@ export const getColdAdvice = async (data: TelemetryData, activeCoach: CoachPerso
             latency: performance.now() - startTime
         };
     }
+};
+
+// --- FEED-FORWARD PATH (Predictive) ---
+
+// Haversine distance in meters
+function haversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
+    const R = 6371e3; // metres
+    const φ1 = lat1 * Math.PI / 180;
+    const φ2 = lat2 * Math.PI / 180;
+    const Δφ = (lat2 - lat1) * Math.PI / 180;
+    const Δλ = (lon2 - lon1) * Math.PI / 180;
+
+    const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+        Math.cos(φ1) * Math.cos(φ2) *
+        Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+    return R * c;
+}
+
+// Checks if the car is inside the "Approaching Zone" (Geofence) of a corner
+export const getFeedForwardAction = (lat: number, lon: number, corners: any[]): FeedForwardAdvice | null => {
+    // 200m Geofence Radius
+    const GEOFENCE_RADIUS = 200;
+
+    for (const corner of corners) {
+        if (!corner.lat || !corner.lon) continue;
+
+        const distance = haversineDistance(lat, lon, corner.lat, corner.lon);
+
+        // Trigger if we are within the radius
+        // We use a "band" to avoid repeated triggering (e.g., between 150m and 200m)
+        if (distance <= GEOFENCE_RADIUS && distance > (GEOFENCE_RADIUS - 50)) {
+            return {
+                message: `APPROACHING ${corner.name}: ${corner.advice}`,
+                distanceToCorner: Math.round(distance)
+            };
+        }
+    }
+    return null;
 };

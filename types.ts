@@ -50,10 +50,22 @@ export interface Session {
   trackTemp: number;
 }
 
+export interface Corner {
+  id: number;
+  name: string; // e.g., "Turn 1"
+  apexDist: number; // Distance from start line
+  entryDist: number; // Approximate braking point
+  exitDist: number; // Track out point
+  lat: number; // Entry point GPS Lat
+  lon: number; // Entry point GPS Lon
+  advice: string; // Pre-canned advice (e.g., "Brake early, late apex")
+}
+
 export interface Track {
   name: string;
   length: number; // meters
   sectors: Sector[];
+  corners: Corner[]; // <-- NEW: Defined corners
   mapPoints: { x: number; y: number }[]; // Simplified polygon for rendering
   recordLap: number;
   center?: { lat: number; lng: number };
@@ -64,4 +76,5 @@ export enum ViewState {
   DASHBOARD = 'DASHBOARD',
   LIVE = 'LIVE',
   ANALYSIS = 'ANALYSIS',
+  VIDEO = 'VIDEO',
 }
