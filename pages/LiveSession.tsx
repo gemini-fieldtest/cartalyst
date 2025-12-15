@@ -754,14 +754,14 @@ Only speak when there's significant change or advice needed.`
               </p>
             </div>
             <div className="hidden lg:block">
-              <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">G-Force</p>
+              <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">GPS</p>
               <p className="text-lg font-mono text-white">
-                <span className={displayGLat > 0.5 ? 'text-blue-400' : displayGLat < -0.5 ? 'text-orange-400' : ''}>
-                  L:{displayGLat.toFixed(1)}
+                <span className="text-blue-400">
+                  {liveFrame?.lat?.toFixed(6) ?? '0.000000'}
                 </span>
-                {' / '}
-                <span className={displayGLong < -0.5 ? 'text-red-400' : displayGLong > 0.3 ? 'text-green-400' : ''}>
-                  A:{displayGLong.toFixed(1)}
+                <span className="text-slate-600 mx-2">|</span>
+                <span className="text-green-400">
+                  {liveFrame?.lon?.toFixed(6) ?? '0.000000'}
                 </span>
               </p>
             </div>

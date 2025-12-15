@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { Upload, Video, Play, FileVideo, Brain, AlertCircle, Youtube } from 'lucide-react';
 import { analyzeVideo } from '../services/geminiService';
+import ReactMarkdown from 'react-markdown';
 
 export const VideoAnalysis: React.FC = () => {
     const [videoFile, setVideoFile] = useState<File | null>(null);
@@ -114,8 +115,8 @@ export const VideoAnalysis: React.FC = () => {
                         <div
                             onClick={() => fileInputRef.current?.click()}
                             className={`border-2 border-dashed rounded-xl p-8 flex flex-col items-center justify-center cursor-pointer transition-all h-[250px] ${videoFile
-                                    ? 'border-indigo-500/50 bg-indigo-500/5'
-                                    : 'border-slate-700 hover:border-indigo-500 hover:bg-slate-800'
+                                ? 'border-indigo-500/50 bg-indigo-500/5'
+                                : 'border-slate-700 hover:border-indigo-500 hover:bg-slate-800'
                                 }`}
                         >
                             <input
@@ -158,8 +159,8 @@ export const VideoAnalysis: React.FC = () => {
                                 onClick={handleAnalyze}
                                 disabled={!videoFile || isAnalyzing}
                                 className={`w-full py-4 rounded-lg font-bold flex items-center justify-center gap-2 transition-all ${isAnalyzing
-                                        ? 'bg-indigo-900 text-indigo-200 cursor-wait'
-                                        : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-500/25'
+                                    ? 'bg-indigo-900 text-indigo-200 cursor-wait'
+                                    : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-500/25'
                                     }`}
                             >
                                 {isAnalyzing ? (
@@ -183,10 +184,10 @@ export const VideoAnalysis: React.FC = () => {
                         </h2>
 
                         {analysis ? (
-                            <div className="prose prose-invert prose-sm max-w-none">
-                                <div className="whitespace-pre-wrap font-sans text-slate-300 leading-relaxed">
+                            <div className="prose prose-invert prose-sm max-w-none font-sans text-slate-300 leading-relaxed">
+                                <ReactMarkdown>
                                     {analysis}
-                                </div>
+                                </ReactMarkdown>
                             </div>
                         ) : (
                             <div className="flex-1 flex flex-col items-center justify-center text-slate-600 text-center p-8">

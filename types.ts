@@ -11,14 +11,23 @@ export interface TelemetryPoint {
 }
 
 export interface GpsSSEPoint {
-  time: string;   // ISO timestamp
+  time: string | number;   // ISO timestamp or relative seconds
   lat: number;
   lon: number;
-  alt: number;
-  speed: number;  // m/s
-  climb: number;
-  track: number;  // Heading
-  mode: number;
+  alt?: number;
+  speed: number;  // m/s or km/h (depending on source)
+  climb?: number;
+  track?: number;  // Heading
+  mode?: number;
+
+  // Extended Telemetry
+  brake?: number;
+  throttle?: number;
+  rpm?: number;
+  gear?: number;
+  steering?: number;
+  gLat?: number;
+  gLong?: number;
 }
 
 export type SSEConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
