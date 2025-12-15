@@ -93,6 +93,10 @@ const getHeuristicAction = (data: TelemetryData): HotAction => {
     else if (brakePos > 10 && Math.abs(latG) > 0.05) {
         action = "TURN_IN";
     }
+    // Being a wuss - lifting on straights when going slow or braking too early (rare trigger)
+    else if (speedKmh < 120 && throttle < 50 && brakePos < 10 && Math.abs(latG) < 0.1 && Math.random() < 0.02) {
+        action = "STOP_BEING_A_WUSS";
+    }
     // Default to something other than MAINTAIN occasionally
     else if (speedKmh > 100 && Math.random() < 0.3) {
         action = "PUSH";

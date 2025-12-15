@@ -144,7 +144,7 @@ Time: ${new Date().toLocaleTimeString()}
 PERFORMANCE
 ------------
 Lap Time: ${summary.lapTime.toFixed(2)}s
-Top Speed: ${summary.maxSpeed.toFixed(1)} km/h
+Top Speed: ${(summary.maxSpeed * 0.621371).toFixed(1)} mph
 Max Lateral G: ${summary.maxLatG.toFixed(2)}g
 Max Longitudinal G: ${summary.maxLongG.toFixed(2)}g
 
@@ -674,7 +674,7 @@ Only speak when there's significant change or advice needed.`
   // === Render ===
 
   const isConnected = connectionState === 'live' || (dataSource === 'file-replay' && isSessionActive);
-  const displaySpeed = liveFrame?.speedKmh ?? 0;
+  const displaySpeed = (liveFrame?.speedKmh ?? 0) * 0.621371; // Convert to mph
   const displayGLat = liveFrame?.gLateral ?? 0;
   const displayGLong = liveFrame?.gLongitudinal ?? 0;
 
@@ -750,7 +750,7 @@ Only speak when there's significant change or advice needed.`
             <div className="hidden md:block">
               <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Speed</p>
               <p className="text-2xl md:text-4xl font-mono font-black text-white">
-                {Math.round(displaySpeed)}<span className="text-lg text-slate-500">km/h</span>
+                {Math.round(displaySpeed)}<span className="text-lg text-slate-500">mph</span>
               </p>
             </div>
             <div className="hidden lg:block">
