@@ -3,11 +3,26 @@ import { TelemetryCharts } from '../components/TelemetryCharts';
 import { TrackVisualizer } from '../components/TrackVisualizer';
 import { MOCK_SESSION, MOCK_TRACK } from '../constants';
 import { analyzeLap, AnalysisResult } from '../services/geminiService';
-import { Lap } from '../types';
+import { Session } from '../types';
 import { Brain, ChevronRight, AlertCircle, CheckCircle2, Flag } from 'lucide-react';
 
-export const Analysis: React.FC = () => {
-    const [selectedLapId, setSelectedLapId] = useState<string>(MOCK_SESSION.bestLapId);
+interface AnalysisProps {
+    sessionData?: Session;
+}
+
+export const Analysis: React.FC<AnalysisProps> = ({ sessionData }) => {
+    // Use sessionData if provided, otherwise fallback to MOCK
+    const session = sessionData || MOCK_SESSION;
+
+    // Careful with default state if session changes
+    const [selectedLapId, setSelectedLapId] = useState<string>(session.bestLapId);
+
+    // Update selectedLapId when session changes
+    React.useEffect(() => {
+        if (sessionData) {
+            setSelectedLapId(sessionData.bestLapId || sessionData.laps[0]?.id);
+        }
+    }, [sessionData]);
 
     // Persist analysis by Lap ID
     const [analysisMap, setAnalysisMap] = useState<Record<string, AnalysisResult>>({});
@@ -16,8 +31,12 @@ export const Analysis: React.FC = () => {
     const aiAnalysis = analysisMap[selectedLapId] || null;
 
     // Find the selected lap and the "ideal" lap for comparison
-    const selectedLap = MOCK_SESSION.laps.find(l => l.id === selectedLapId) || MOCK_SESSION.laps[0];
-    const idealLap = MOCK_SESSION.laps.find(l => l.id === 'lap_ideal') || MOCK_SESSION.laps[0];
+    const selectedLap = session.laps.find(l => l.id === selectedLapId) || session.laps[0];
+
+    // For live session, we might not have an ideal lap yet. Default to best lap or mock ideal if available.
+    // If we are using MOCK_SESSION, we have 'lap_ideal'.
+    // If using real session, we might just compare against best lap of the session for now.
+    const idealLap = session.laps.find(l => l.id === 'lap_ideal') || session.laps.find(l => l.id === session.bestLapId) || session.laps[0];
 
     const handleRunAnalysis = async () => {
         setIsAnalyzing(true);
@@ -39,11 +58,11 @@ export const Analysis: React.FC = () => {
             <div className="w-64 md:w-80 bg-slate-900/50 border-r border-white/5 flex flex-col h-full overflow-hidden shrink-0">
                 <div className="p-6 border-b border-white/5">
                     <h2 className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-1">Data Source</h2>
-                    <p className="text-sm font-bold text-white">{MOCK_SESSION.date}</p>
-                    <p className="text-xs text-slate-400">{MOCK_SESSION.trackName} • {(MOCK_TRACK.length / 1609.34).toFixed(2)} mi</p>
+                    <p className="text-sm font-bold text-white">{session.date}</p>
+                    <p className="text-xs text-slate-400">{session.trackName} • {(MOCK_TRACK.length / 1609.34).toFixed(2)} mi</p>
                 </div>
                 <div className="flex-1 overflow-y-auto p-4 space-y-2">
-                    {MOCK_SESSION.laps.filter(l => l.id !== 'lap_ideal').map(lap => (
+                    {session.laps.filter(l => l.id !== 'lap_ideal').map(lap => (
                         <button
                             key={lap.id}
                             onClick={() => { setSelectedLapId(lap.id); }}
@@ -53,7 +72,7 @@ export const Analysis: React.FC = () => {
                                 }`}
                         >
                             <div className="flex items-center gap-3">
-                                <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${lap.id === MOCK_SESSION.bestLapId ? 'bg-amber-500/20 text-amber-500' : 'bg-slate-800 text-slate-500'}`}>
+                                <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${lap.id === session.bestLapId ? 'bg-amber-500/20 text-amber-500' : 'bg-slate-800 text-slate-500'}`}>
                                     L{lap.lapNumber}
                                 </span>
                                 <span className="font-mono font-bold text-base">{lap.time.toFixed(2)}s</span>

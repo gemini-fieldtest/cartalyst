@@ -76,18 +76,31 @@ export const TrackVisualizer = forwardRef<any, TrackVisualizerProps>(({ track, c
             const SCALE_X = 80000;
             const SCALE_Y = 100000; // Latitude degrees are taller approx
 
-            if (!track || !track.center) return;
+            if (!track || !track.center) {
+                console.log('[TrackVisualizer] No track or track.center available');
+                return;
+            }
 
             const dx = (data.lon - track.center.lng) * SCALE_X;
             const dy = (track.center.lat - data.lat) * SCALE_Y; // Invert Y for screen coords
 
-            // Offset to map center (350, 250 default)
-            // But we want to map it to the track's visual bbox?
-            // MOCK_TRACK bbox is around (50,150) to (600,450). Center approx 325, 300.
+            console.log('[TrackVisualizer] GPS Update:', {
+                gpsLat: data.lat,
+                gpsLon: data.lon,
+                trackCenterLat: track.center.lat,
+                trackCenterLng: track.center.lng,
+                deltaLat: data.lat - track.center.lat,
+                deltaLon: data.lon - track.center.lng,
+                dx,
+                dy,
+                finalX: dx,
+                finalY: dy
+            });
 
             // Dynamic centering if we assume 0,0 is track center
-            const cx = 350;
-            const cy = 250;
+            // MOCK_TRACK map points are centered at 0,0, so we do NOT want to offset by screen center (350,250)
+            const cx = 0;
+            const cy = 0;
 
             setInternalUserPos({ x: cx + dx, y: cy + dy });
             setInternalUserPath(prev => {

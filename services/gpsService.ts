@@ -55,6 +55,7 @@ export class GpsSSEService {
 
             this.eventSource.onmessage = (event) => {
                 this.processDataLine(event.data);
+                console.log(event.data)
             };
 
             this.eventSource.onerror = (err) => {
@@ -134,15 +135,66 @@ export class GpsSSEService {
 
     private processDataLine(rawData: string) {
         try {
-            // Expected format: time,lat,lon,alt,speed,climb,track,mode
+            // Expected format options:
+            // 1. JSON: { lat, lon, speed, heading, ... }
+            // 2. CSV: time,lat,lon,alt,speed,climb,track,mode
+
             if (!rawData) return;
-            // Handle SSE format "data: ..." if present from file? 
-            // The file provided looks like raw CSV lines.
             const cleanData = rawData.replace(/^data:\s?/, '');
+
+            // Try JSON parsing first (User's new format)
+            if (cleanData.trim().startsWith('{')) {
+                try {
+                    const data = JSON.parse(cleanData);
+
+                    // Robust coordinate extraction
+                    const lat = typeof data.lat === 'number' ? data.lat : (parseFloat(data.latitude) || 0);
+                    const lon = typeof data.lon === 'number' ? data.lon : (parseFloat(data.longitude) || 0);
+
+                    if (lat === 0 && lon === 0 && !data.lat) {
+                        // Fallback check if 0,0 is valid or if extraction failed
+                        // But for now, if completely missing, ignore
+                    }
+
+                    const point: GpsSSEPoint = {
+                        time: data.time ?? 0,
+                        lat: lat,
+                        lon: lon,
+                        speed: data.speed ?? 0,
+                        track: data.heading ?? data.track ?? 0,
+                        alt: data.alt ?? 0,
+
+                        // Extended Telemetry
+                        brake: data.brake,
+                        throttle: data.throttle,
+                        rpm: data.rpm,
+                        gear: data.gear,
+                        steering: data.steering,
+                        gLat: data.gLat,
+                        gLong: data.gLong
+                    };
+
+                    // Basic validation for JSON path
+                    if (isNaN(point.lat) || isNaN(point.lon)) {
+                        console.warn('[GpsSSEService] Invalid JSON lat/lon:', data);
+                        return;
+                    }
+
+                    if (this.onData) {
+                        this.onData(point);
+                    }
+                    return;
+                } catch (e) {
+                    console.warn('[GpsSSEService] JSON parse failed', e);
+                    return;
+                }
+            }
 
             const parts = cleanData.split(',');
             if (parts.length < 8) {
-                console.warn('[GpsSSEService] Invalid data format:', rawData);
+                // If it wasn't JSON and doesn't have 8 parts, it's invalid
+                // But avoid logging spam if it's just an empty line or something
+                if (cleanData.length > 5) console.warn('[GpsSSEService] Invalid data format:', rawData);
                 return;
             }
 
