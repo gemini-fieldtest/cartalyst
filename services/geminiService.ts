@@ -2,14 +2,17 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { Lap, Track } from '../types';
 
 // Safely initialize the AI client
+// Safely initialize the AI client
 const getAiClient = () => {
-  const apiKey = process.env.API_KEY;
+  // Vite exposes env variables via import.meta.env
+  const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
   if (!apiKey) {
-    console.error("API Key not found in environment variables.");
+    console.error("API Key not found. Ensure VITE_GEMINI_API_KEY is set in .env");
     return null;
   }
   return new GoogleGenAI({ apiKey });
 };
+
 
 export interface AnalysisResult {
   tips: string[];
@@ -156,6 +159,9 @@ export const analyzeVideo = async (file: File): Promise<string> => {
 
   } catch (error) {
     console.error("Video Analysis Error:", error);
+    if (error instanceof Error) {
+      return `Error: ${error.message}`;
+    }
     return "Error analyzing video. Ensure the file is a valid video format.";
   }
 }
