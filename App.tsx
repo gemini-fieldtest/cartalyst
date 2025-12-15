@@ -8,13 +8,19 @@ import { ViewState } from './types';
 
 const App: React.FC = () => {
   const [currentView, setCurrentView] = useState<ViewState>(ViewState.DASHBOARD);
+  const [sessionData, setSessionData] = useState<any>(null);
+
+  const handleSessionComplete = (session: any) => {
+    setSessionData(session);
+    setCurrentView(ViewState.ANALYSIS);
+  };
 
   const renderContent = () => {
     switch (currentView) {
       case ViewState.LIVE:
-        return <LiveSession />;
+        return <LiveSession onSessionComplete={handleSessionComplete} />;
       case ViewState.ANALYSIS:
-        return <Analysis />;
+        return <Analysis sessionData={sessionData} />;
       case ViewState.VIDEO:
         return <VideoAnalysis />;
       case ViewState.DASHBOARD:
