@@ -15,7 +15,7 @@ Cartalyst is a real-time racing telemetry application that provides AI-powered c
 ## Features
 
 - **Live Telemetry Dashboard** - Real-time visualization of speed, G-forces, throttle, and brake data
-- **AI Coaching System** - Multiple coach personas powered by Gemini AI:
+- **AI Coaching System** - Multiple coach personas powered by Gemini AI (developed using the customer requirements + Gemini 3.0 [link](https://gemini.google.com/share/983c4a8080ea)):
   - **Tony** - Encouraging, feel-based coaching ("Commit!", "Good hustle!")
   - **Rachel** - Technical physics-focused advice ("Smooth release, balance platform")
   - **AJ** - Direct, actionable commands ("Lat G settling, hammer throttle")
